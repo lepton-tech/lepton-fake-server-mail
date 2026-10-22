@@ -1,0 +1,129 @@
+<section class="view" id="view-connect" x-data="connect" x-show="$store.app.view === 'connect'" x-cloak>
+  <div class="page" id="connect-page">
+    <template x-if="ctx">
+      <div>
+        <h2>Como conectar</h2>
+        <p class="muted">Aponte seu aplicativo para o servidor abaixo. Por padrão qualquer usuário e senha são aceitos, e todas as mensagens enviadas ficam presas aqui: nada é entregue de verdade.</p>
+
+        <div class="cards">
+          <div class="card">
+            <h3>Servidor</h3>
+            <table class="grid kv">
+              <tr>
+                <th>Host</th>
+                <td>
+                  <div class="copy-row"><code>localhost</code><button class="ghost" @click="$store.app.copy('localhost')">Copiar</button></div>
+                  <span class="muted small" x-show="ctx.network">De containers Docker: host.docker.internal. De outras máquinas: o IP deste computador.</span>
+                </td>
+              </tr>
+              <tr>
+                <th>Usuário</th>
+                <td>
+                  <div class="copy-row"><code x-text="ctx.user"></code><button class="ghost" @click="$store.app.copy(ctx.user)">Copiar</button></div>
+                  <span class="muted small" x-text="ctx.acceptAny ? 'Qualquer usuário é aceito.' : 'Usuário cadastrado em Configurações.'"></span>
+                </td>
+              </tr>
+              <tr>
+                <th>Senha</th>
+                <td>
+                  <div class="copy-row"><code x-text="ctx.pass"></code><button class="ghost" @click="$store.app.copy(ctx.pass)">Copiar</button></div>
+                  <span class="muted small" x-text="ctx.acceptAny ? 'Qualquer senha é aceita.' : 'Senha cadastrada em Configurações.'"></span>
+                </td>
+              </tr>
+              <tr>
+                <th>Token OAuth</th>
+                <td>
+                  <div class="copy-row"><code x-text="ctx.tokenUrl"></code><button class="ghost" @click="$store.app.copy(ctx.tokenUrl)">Copiar</button></div>
+                  <span class="muted small">Use com <code>XOAUTH2</code> ou <code>OAUTHBEARER</code>.</span>
+                </td>
+              </tr>
+            </table>
+          </div>
+          <div class="card">
+            <h3>Portas</h3>
+            <table class="grid">
+              <tr><th>Serviço</th><th>Porta</th><th>Segurança</th></tr>
+              <template x-for="s in services" :key="s.name">
+                <tr>
+                  <td x-text="s.name"></td>
+                  <td>
+                    <div class="copy-row" x-show="s.running"><code x-text="s.port"></code><button class="ghost" @click="$store.app.copy(String(s.port))">Copiar</button></div>
+                    <span x-show="!s.running">—</span>
+                    <span class="tag warn" x-show="s.error" x-text="s.error"></span>
+                  </td>
+                  <td x-text="security(s)"></td>
+                </tr>
+              </template>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Configuração pronta para colar</h3>
+          <p class="muted small">Blocos completos com os valores reais deste servidor, inclusive as portas atuais. Escolha o formato do seu projeto e clique em Copiar.</p>
+          <div x-data="{ group: 'config' }" class="snippet-group">
+            <div class="lang-tabs"><template x-for="lang in langs(group)" :key="lang"><button class="ghost" :class="{ active: activeLang(group) === lang }" @click="setLang(group, lang)" x-text="lang"></button></template></div>
+            <div class="snippet"><button class="ghost" @click="$store.app.copy(code(group))">Copiar</button><pre x-text="code(group)"></pre></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Enviar e-mail (SMTP)</h3>
+          <div x-data="{ group: 'smtp' }" class="snippet-group">
+            <div class="lang-tabs"><template x-for="lang in langs(group)" :key="lang"><button class="ghost" :class="{ active: activeLang(group) === lang }" @click="setLang(group, lang)" x-text="lang"></button></template></div>
+            <div class="snippet"><button class="ghost" @click="$store.app.copy(code(group))">Copiar</button><pre x-text="code(group)"></pre></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Ler e-mails (IMAP e POP3)</h3>
+          <div x-data="{ group: 'read' }" class="snippet-group">
+            <div class="lang-tabs"><template x-for="lang in langs(group)" :key="lang"><button class="ghost" :class="{ active: activeLang(group) === lang }" @click="setLang(group, lang)" x-text="lang"></button></template></div>
+            <div class="snippet"><button class="ghost" @click="$store.app.copy(code(group))">Copiar</button><pre x-text="code(group)"></pre></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Autenticar com OAuth 2.0</h3>
+          <p class="muted small">1) Peça um token ao servidor OAuth falso. 2) Use o token no SMTP, POP3 ou IMAP com <code>XOAUTH2</code> ou <code>OAUTHBEARER</code>. Tokens expirados, revogados ou de outro usuário são recusados, como num servidor real.</p>
+          <p class="muted small">Para bibliotecas da Microsoft (MSAL), use o authority <code x-text="ctx.authority"></code>; o token sai de <code x-text="ctx.msToken"></code>. A MSAL exige HTTPS confiável, então clique em <b>Confiar no certificado</b> no fim desta página.</p>
+          <div x-data="{ group: 'oauth' }" class="snippet-group">
+            <div class="lang-tabs"><template x-for="lang in langs(group)" :key="lang"><button class="ghost" :class="{ active: activeLang(group) === lang }" @click="setLang(group, lang)" x-text="lang"></button></template></div>
+            <div class="snippet"><button class="ghost" @click="$store.app.copy(code(group))">Copiar</button><pre x-text="code(group)"></pre></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Agentes de IA (MCP)</h3>
+          <p class="muted small">Agentes como Claude Code, Claude Desktop, Cursor, VS Code e Codex podem ler, esperar e enviar e-mails, gerar e revogar tokens OAuth, ver o log das conexões e mudar as regras do servidor. Há duas formas de conectar:</p>
+          <ul class="muted small">
+            <li><b>HTTP</b> (<code x-text="ctx.mcpHttp"></code>): funciona enquanto este aplicativo estiver aberto.</li>
+            <li><b>stdio</b> (<code>FakeServerEmail.exe --mcp</code>): o agente inicia o processo. Se o aplicativo já estiver aberto, usa o mesmo servidor; se não estiver, sobe um em segundo plano.</li>
+          </ul>
+          <div x-data="{ group: 'mcp' }" class="snippet-group">
+            <div class="lang-tabs"><template x-for="lang in langs(group)" :key="lang"><button class="ghost" :class="{ active: activeLang(group) === lang }" @click="setLang(group, lang)" x-text="lang"></button></template></div>
+            <div class="snippet"><button class="ghost" @click="$store.app.copy(code(group))">Copiar</button><pre x-text="code(group)"></pre></div>
+          </div>
+          <p class="muted small">Ferramentas: <template x-for="(tool, i) in tools" :key="tool"><span><code x-text="tool"></code><span x-text="i < tools.length - 1 ? ', ' : '.'"></span></span></template></p>
+        </div>
+
+        <div class="card">
+          <h3>Certificado TLS</h3>
+          <p class="muted small">STARTTLS, SMTPS, POP3S, IMAPS e o HTTPS usam um certificado autoassinado para <code>localhost</code>. Configure o cliente para aceitar certificados inválidos, ou marque este certificado como confiável no seu usuário do Windows (o Windows vai pedir confirmação).</p>
+          <p>
+            Situação:
+            <span class="tag ok" x-show="status.certificate.trusted">confiável neste usuário</span>
+            <span class="tag warn" x-show="!status.certificate.trusted">não confiável</span>
+            · válido até <span x-text="fmtDate(status.certificate.notAfter)"></span>
+            · <span class="mono small" x-text="status.certificate.thumbprint"></span>
+          </p>
+          <div class="actions left">
+            <button class="ghost" x-show="status.certificate.trusted" @click="setTrust(false)">Remover confiança</button>
+            <button x-show="!status.certificate.trusted" @click="setTrust(true)">Confiar no certificado</button>
+            <a class="button ghost" href="/api/certificate">Baixar .cer</a>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+</section>

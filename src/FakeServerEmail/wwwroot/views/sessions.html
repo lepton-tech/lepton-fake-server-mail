@@ -1,0 +1,51 @@
+<section class="view" id="view-sessions" x-data="sessions" x-show="$store.app.view === 'sessions'" x-cloak>
+  <div class="split" :class="{ reading: current }">
+    <aside class="list-pane">
+      <div class="list-tools">
+        <div class="row">
+          <select class="auto" x-model="protocol" aria-label="Filtrar por protocolo">
+            <option value="">Todos os protocolos</option>
+            <option>SMTP</option>
+            <option>POP3</option>
+            <option>IMAP</option>
+          </select>
+          <span class="spacer"></span>
+          <button class="ghost icon" title="Atualizar" aria-label="Atualizar lista de conexões" @click="load()">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20v-4h-4"/></svg>
+          </button>
+          <button class="ghost danger" @click="clear()">Limpar</button>
+        </div>
+      </div>
+      <ul class="items" id="session-list">
+        <template x-for="s in filtered" :key="s.id">
+          <li :data-session="s.id" :class="{ selected: s.id === selectedId }" @click="open(s.id)">
+            <span class="who" x-text="s.client"></span>
+            <span class="when" x-text="fmtShort(s.startedAt)"></span>
+            <span class="meta">
+              <template x-for="tag in tags(s)" :key="tag.text">
+                <span class="tag" :class="tag.cls" x-text="tag.text"></span>
+              </template>
+              <span x-text="s.lineCount + ' linhas'"></span>
+            </span>
+          </li>
+        </template>
+      </ul>
+      <div class="empty" x-show="filtered.length === 0"><p>Nenhuma conexão registrada ainda.</p></div>
+    </aside>
+
+    <article class="reader">
+      <div class="empty reader-empty" x-show="!current"><p>Selecione uma conexão para ver o diálogo completo entre cliente e servidor.</p></div>
+      <div class="reader-content" x-show="current">
+        <div class="reader-head">
+          <div class="reader-actions"><button class="ghost mobile-only" @click="close()">← Voltar</button></div>
+          <h1 x-text="title"></h1>
+          <p class="muted" x-text="meta"></p>
+        </div>
+        <div class="tab-body" x-ref="body">
+          <pre class="mono transcript" id="transcript"><template x-for="(l, i) in lines" :key="i"><span><span class="t" x-text="lineTime(l)"></span><span :class="lineClass(l)" x-text="lineText(l)"></span>
+</span></template></pre>
+        </div>
+      </div>
+    </article>
+  </div>
+</section>

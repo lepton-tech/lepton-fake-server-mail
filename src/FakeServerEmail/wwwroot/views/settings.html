@@ -1,0 +1,100 @@
+<section class="view" id="view-settings" x-data="settings" x-show="$store.app.view === 'settings'" x-cloak>
+  <div class="page">
+    <h2>Configurações</h2>
+    <template x-if="model">
+      <form id="settings-form" class="form settings" @submit.prevent="save()">
+        <div class="card">
+          <h3>Usuário e senha</h3>
+          <p class="muted small">Define o que acontece quando um aplicativo faz login com usuário e senha no SMTP, no POP3 ou no IMAP, ou pede um token OAuth pelo fluxo <code>password</code>. O login com token OAuth é configurado no próximo bloco.</p>
+          <div class="choices">
+            <label class="check option" :class="{ chosen: passwordMode === 'any' }">
+              <input type="radio" name="password-mode" :checked="passwordMode === 'any'" @change="setPasswordMode('any')">
+              <span><b>Aceitar qualquer usuário e senha</b><br><span class="muted small">Recomendado para testes. Qualquer combinação entra, então o aplicativo nunca falha por senha.</span></span>
+            </label>
+            <label class="check option" :class="{ chosen: passwordMode === 'users' }">
+              <input type="radio" name="password-mode" :checked="passwordMode === 'users'" @change="setPasswordMode('users')">
+              <span><b>Aceitar só os usuários cadastrados</b><br><span class="muted small">Para testar senha errada. Quem não estiver na lista, ou errar a senha, recebe o erro de autenticação do protocolo: <code>535</code> no SMTP, <code>-ERR</code> no POP3 e <code>NO</code> no IMAP.</span></span>
+            </label>
+          </div>
+          <div class="users" x-show="passwordMode === 'users'">
+            <table class="grid">
+              <tr><th>Usuário (normalmente o e-mail)</th><th>Senha</th><th></th></tr>
+              <template x-for="u in userRows" :key="u.id">
+                <tr>
+                  <td><input x-model="u.username" placeholder="ana@empresa.local" aria-label="Usuário"></td>
+                  <td><input x-model="u.password" placeholder="senha" aria-label="Senha" autocomplete="off"></td>
+                  <td><button type="button" class="ghost danger" @click="removeUser(u.id)">Remover</button></td>
+                </tr>
+              </template>
+              <tr x-show="userRows.length === 0"><td colspan="3" class="muted">Nenhum usuário cadastrado.</td></tr>
+            </table>
+            <div class="actions left"><button type="button" class="ghost" @click="addUser()">+ Adicionar usuário</button></div>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Regras de envio e de tokens</h3>
+          <label class="check">
+            <input type="checkbox" x-model="model.smtpRequireAuth">
+            <span>Exigir login para enviar pelo SMTP<br><span class="muted small">Desligado, qualquer aplicativo envia sem fazer login. Ligado, quem tentar enviar sem login recebe <code>530 Autenticação obrigatória</code>, como num servidor real.</span></span>
+          </label>
+          <label class="check">
+            <input type="checkbox" x-model="model.validateOAuthTokens">
+            <span>Validar tokens OAuth<br><span class="muted small">Ligado, o login com token (XOAUTH2 ou OAUTHBEARER) só passa se o token foi emitido por este servidor, está dentro da validade, não foi revogado e pertence ao mesmo usuário do login. Desligado, qualquer token passa.</span></span>
+          </label>
+          <label>Validade dos tokens OAuth (segundos) <input type="number" min="10" x-model="model.tokenLifetimeSeconds"></label>
+        </div>
+        <div class="card">
+          <h3>Caixas de correio</h3>
+          <label class="check"><input type="checkbox" x-model="model.separateMailboxesByRecipient"> Separar caixas por destinatário (no POP3/IMAP, quem entra com um e-mail vê só as mensagens enviadas para ele)</label>
+          <label>Tamanho máximo da mensagem (MB) <input type="number" min="1" max="1024" x-model="model.maxMessageSizeMb"></label>
+        </div>
+        <div class="card">
+          <h3>Portas</h3>
+          <p class="muted small">Se uma porta estiver ocupada, o servidor escolhe outra automaticamente. Use 0 para desativar um serviço.</p>
+          <div class="ports">
+            <template x-for="p in ports" :key="p[0]">
+              <label><span x-text="p[1]"></span> <input type="number" min="0" max="65535" x-model="model[p[0]]"></label>
+            </template>
+          </div>
+          <label class="check"><input type="checkbox" x-model="model.allowNetworkAccess"> Aceitar conexões de outras máquinas e de containers Docker (o Windows pode pedir permissão no firewall)</label>
+          <label class="check"><input type="checkbox" x-model="model.openBrowserOnStart"> Abrir o navegador ao iniciar</label>
+        </div>
+        <div class="actions sticky">
+          <span class="muted small" x-text="message"></span>
+          <span class="spacer"></span>
+          <button type="submit">Salvar</button>
+        </div>
+      </form>
+    </template>
+
+    <div class="card">
+      <h3>Servidor</h3>
+      <p class="muted small" x-text="info"></p>
+      <div class="actions left">
+        <button class="ghost" @click="shutdown()">Encerrar servidor</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Dados guardados</h3>
+      <p class="muted small">E-mails, tokens, configurações, chave do OAuth e certificado ficam em <code x-text="dataDirectory"></code>.</p>
+      <div class="data-actions">
+        <div>
+          <b>Abrir pasta</b>
+          <p class="muted small">Mostra os arquivos no Explorador do Windows. Cada e-mail é um <code>.eml</code>.</p>
+          <button class="ghost" @click="openFolder()">Abrir pasta de dados</button>
+        </div>
+        <div>
+          <b>Limpar dados</b>
+          <p class="muted small">Apaga todos os e-mails, as pastas criadas, os tokens OAuth e o log de conexões. As configurações continuam e o servidor segue rodando.</p>
+          <button class="ghost danger" id="btn-clear-data" @click="clearData()">Limpar dados</button>
+        </div>
+        <div>
+          <b>Remover dados do computador</b>
+          <p class="muted small">Apaga tudo o que o programa gravou, inclusive configurações e certificado, tira o certificado da lista de confiáveis do Windows e fecha o programa. Depois disso, basta apagar o <code>.exe</code>: nada mais fica no computador.</p>
+          <button class="danger-solid" id="btn-remove-data" @click="removeData()">Remover dados do computador</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
