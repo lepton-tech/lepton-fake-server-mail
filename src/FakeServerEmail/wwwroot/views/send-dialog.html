@@ -1,0 +1,17 @@
+<div x-data="sendDialog">
+  <dialog id="send-dialog" x-ref="dialog" aria-labelledby="send-dialog-title">
+    <form class="form" @submit.prevent="send()">
+      <h3 id="send-dialog-title">Enviar e-mail de teste</h3>
+      <label>De <input x-model="form.from"></label>
+      <label>Para <input x-model="form.to"></label>
+      <label>Assunto <input x-model="form.subject"></label>
+      <label>Texto <textarea rows="4" x-model="form.text"></textarea></label>
+      <label class="check"><input type="checkbox" x-model="form.withHtml"> Incluir versão HTML</label>
+      <label class="check"><input type="checkbox" x-model="form.attachSample"> Anexar um arquivo de exemplo</label>
+      <div class="actions">
+        <button type="button" class="ghost" @click="close()">Cancelar</button>
+        <button type="submit" id="btn-do-send" :disabled="sending">Enviar</button>
+      </div>
+    </form>
+  </dialog>
+</div>

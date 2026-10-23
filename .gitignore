@@ -55,3 +55,9 @@ CodeCoverage/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+
+# Fake Server Email
+dist/
+.vs/
+.playwright-mcp/
+*.user
