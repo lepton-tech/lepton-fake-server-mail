@@ -100,8 +100,7 @@ A janela preta mostra o endereço da caixa de entrada e as portas em uso:
   SMTP submissão    587     STARTTLS opcional
 ```
 
-> [!IMPORTANT]
-> **Deixe a janela preta aberta enquanto estiver testando.** Fechar a janela desliga o servidor. Se abrir o arquivo de novo com ele já rodando, ele só abre a caixa de entrada que já existe.
+> ⚠️ **Importante: deixe a janela preta aberta enquanto estiver testando.** Fechar a janela desliga o servidor. Se abrir o arquivo de novo com ele já rodando, ele só abre a caixa de entrada que já existe.
 
 ## Configurar o sistema que você vai testar
 
@@ -121,8 +120,7 @@ A aba **Como conectar** mostra os valores reais do seu computador. Se a porta 25
 
 <p align="center"><img src="docs/imagens/como-conectar.png" width="900" alt="Aba Como conectar com servidor, usuário, senha e portas"></p>
 
-> [!TIP]
-> **O sistema roda em outra máquina ou num container Docker?** Marque **Aceitar conexões de outras máquinas e de containers Docker** em **Configurações → Portas**. No Docker, use `host.docker.internal` como servidor.
+> 💡 **Dica: o sistema roda em outra máquina ou num container Docker?** Marque **Aceitar conexões de outras máquinas e de containers Docker** em **Configurações → Portas**. No Docker, use `host.docker.internal` como servidor.
 
 <details>
 <summary><b>Todos os serviços e portas</b></summary>
