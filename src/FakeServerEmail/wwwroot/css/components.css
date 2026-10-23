@@ -168,6 +168,10 @@
 
 .ports { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
 
+.port { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); }
+
+.form .port label.check { color: inherit; }
+
 .actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; flex-wrap: wrap; }
 
 .actions.left { justify-content: flex-start; }

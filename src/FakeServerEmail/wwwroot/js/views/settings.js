@@ -2,15 +2,15 @@ import { api } from "../lib/api.js";
 import { fmtDate } from "../lib/format.js";
 
 const PORTS = [
-  ["smtpPort", "SMTP"],
-  ["smtpSubmissionPort", "SMTP submissão"],
-  ["smtpsPort", "SMTPS (TLS)"],
-  ["pop3Port", "POP3"],
-  ["pop3sPort", "POP3S (TLS)"],
-  ["imapPort", "IMAP"],
-  ["imapsPort", "IMAPS (TLS)"],
-  ["httpPort", "Interface web (HTTP)"],
-  ["httpsPort", "OAuth/Web (HTTPS)"],
+  { key: "smtpPort", label: "SMTP", standard: 25 },
+  { key: "smtpSubmissionPort", label: "SMTP submissão", standard: 587 },
+  { key: "smtpsPort", label: "SMTPS (TLS)", standard: 465 },
+  { key: "pop3Port", label: "POP3", standard: 110 },
+  { key: "pop3sPort", label: "POP3S (TLS)", standard: 995 },
+  { key: "imapPort", label: "IMAP", standard: 143 },
+  { key: "imapsPort", label: "IMAPS (TLS)", standard: 993 },
+  { key: "httpPort", label: "Interface web (HTTP)", standard: 5080, required: true },
+  { key: "httpsPort", label: "OAuth/Web (HTTPS)", standard: 5443 },
 ];
 
 const MECHANISMS = [
@@ -28,8 +28,11 @@ export default () => ({
   ports: PORTS,
   mechanisms: MECHANISMS,
   model: null,
+  off: {},
   userRows: [],
   message: "",
+
+  fmtDate,
 
   init() {
     this.$watch("$store.app.view", (view) => view === "settings" && this.load());
@@ -43,6 +46,15 @@ export default () => ({
 
   get dataDirectory() {
     return this.$store.app.status?.dataDirectory ?? "";
+  },
+
+  get certificate() {
+    return this.$store.app.status?.certificate ?? null;
+  },
+
+  toggle(p, on) {
+    this.off[p.key] = !on;
+    if (on && !(parseInt(this.model[p.key], 10) > 0)) this.model[p.key] = p.standard;
   },
 
   get passwordMode() {
@@ -66,8 +78,14 @@ export default () => ({
   async load() {
     const s = await api("/api/settings");
     this.userRows = (s.users || []).map((u) => row(u.username, u.password));
+    this.off = Object.fromEntries(PORTS.map((p) => [p.key, !p.required && !(s[p.key] > 0)]));
     this.model = s;
     this.message = "";
+    const anchor = this.$store.app.anchor;
+    if (anchor) {
+      this.$store.app.anchor = null;
+      this.$nextTick(() => document.getElementById(anchor)?.scrollIntoView({ block: "start" }));
+    }
   },
 
   async save() {
@@ -77,7 +95,17 @@ export default () => ({
       return;
     }
     const settings = { ...this.model, users };
-    for (const [key] of PORTS) settings[key] = parseInt(settings[key] || "0", 10);
+    for (const p of PORTS) {
+      const port = parseInt(settings[p.key] || "0", 10);
+      if (this.off[p.key]) {
+        settings[p.key] = 0;
+      } else if (port >= 1 && port <= 65535) {
+        settings[p.key] = port;
+      } else {
+        this.$store.app.notify(`Informe uma porta de 1 a 65535 para ${p.label}${p.required ? "" : " ou desmarque o serviço"}.`, true);
+        return;
+      }
+    }
     settings.tokenLifetimeSeconds = parseInt(settings.tokenLifetimeSeconds || "0", 10);
     settings.maxMessageSizeMb = parseInt(settings.maxMessageSizeMb || "0", 10);
     try {
@@ -91,6 +119,16 @@ export default () => ({
     } catch (err) {
       this.$store.app.notify(err.message, true);
     }
+  },
+
+  async setTrust(trust) {
+    try {
+      await api("/api/certificate/" + (trust ? "trust" : "untrust"), { method: "POST" });
+      this.$store.app.notify(trust ? "Certificado marcado como confiável" : "Confiança removida");
+    } catch (err) {
+      this.$store.app.notify(err.message, true);
+    }
+    this.$store.app.loadStatus();
   },
 
   openFolder() {

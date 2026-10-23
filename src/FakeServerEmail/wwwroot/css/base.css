@@ -107,6 +107,8 @@ textarea { resize: vertical; }
 
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
 
+input:disabled { background: var(--panel-2); cursor: default; }
+
 .muted { color: var(--muted); }
 
 .small { font-size: 12.5px; }

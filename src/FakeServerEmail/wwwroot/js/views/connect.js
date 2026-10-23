@@ -1,12 +1,8 @@
-import { api } from "../lib/api.js";
-import { fmtDate } from "../lib/format.js";
 import { buildSnippets, MCP_TOOLS } from "./connect-snippets.js";
 
 export default () => ({
   active: {},
   tools: MCP_TOOLS,
-
-  fmtDate,
 
   get status() {
     return this.$store.app.status;
@@ -70,13 +66,7 @@ export default () => ({
     return s.protocol === "POP3" ? "Sem TLS ou STLS" : "Sem TLS ou STARTTLS";
   },
 
-  async setTrust(trust) {
-    try {
-      await api("/api/certificate/" + (trust ? "trust" : "untrust"), { method: "POST" });
-      this.$store.app.notify(trust ? "Certificado marcado como confiável" : "Confiança removida");
-    } catch (err) {
-      this.$store.app.notify(err.message, true);
-    }
-    this.$store.app.loadStatus();
+  openCertificate() {
+    this.$store.app.setView("settings", "certificado");
   },
 });

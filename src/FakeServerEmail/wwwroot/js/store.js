@@ -14,13 +14,14 @@ export function createAppStore() {
     tabs: TABS,
     status: null,
     view: "inbox",
+    anchor: null,
     stopped: null,
     toast: { text: "", error: false, visible: false },
     toastTimer: null,
 
     init() {
       try {
-        const saved = localStorage.getItem("fse-view");
+        const saved = sessionStorage.getItem("fse-view");
         if (TABS.some((t) => t.id === saved)) this.view = saved;
       } catch { }
       this.loadStatus();
@@ -35,9 +36,10 @@ export function createAppStore() {
       } catch { }
     },
 
-    setView(view) {
+    setView(view, anchor = null) {
+      this.anchor = anchor;
       this.view = view;
-      try { localStorage.setItem("fse-view", view); } catch { }
+      try { sessionStorage.setItem("fse-view", view); } catch { }
     },
 
     notify(text, error = false) {
