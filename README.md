@@ -6,18 +6,18 @@ Dê dois cliques no executável: os serviços sobem e o navegador abre a caixa d
 
 ## Serviços e portas padrão
 
-| Serviço | Porta | Segurança |
-|---|---|---|
-| SMTP | 25 | sem TLS ou STARTTLS |
-| SMTP submissão | 587 | sem TLS ou STARTTLS |
-| SMTPS | 465 | TLS direto |
-| POP3 | 110 | sem TLS ou STLS |
-| POP3S | 995 | TLS direto |
-| IMAP | 143 | sem TLS ou STARTTLS |
-| IMAPS | 993 | TLS direto |
-| Interface web e OAuth | 5080 (HTTP) e 5443 (HTTPS) | |
+| Serviço | Porta | Ligado por padrão | Segurança |
+|---|---|---|---|
+| SMTP | 25 | sim | sem TLS ou STARTTLS |
+| SMTP submissão | 587 | sim | sem TLS ou STARTTLS |
+| SMTPS | 465 (sugerida) | não | TLS direto |
+| POP3 | 110 (sugerida) | não | sem TLS ou STLS |
+| POP3S | 995 (sugerida) | não | TLS direto |
+| IMAP | 143 (sugerida) | não | sem TLS ou STARTTLS |
+| IMAPS | 993 (sugerida) | não | TLS direto |
+| Interface web e OAuth | 5080 (HTTP) e 5443 (HTTPS) | sim | |
 
-Se uma porta estiver ocupada, o servidor escolhe outra sozinho (por exemplo, 25 vira 2025) e mostra a porta real no console e na interface. Em **Configurações → Portas** dá para trocar a porta de cada serviço ou usar 0 para desligar os que não forem usados.
+Por padrão só o envio (SMTP e SMTP submissão) vem ligado. Em **Configurações → Portas** cada serviço tem uma caixa para ligar ou desligar; ao ligar, ele usa a porta sugerida, e dá para trocá-la. Se uma porta estiver ocupada, o servidor escolhe outra sozinho (por exemplo, 25 vira 2025) e mostra a porta real no console e na interface.
 
 - **Autenticação:** por padrão, só entra o usuário `teste@teste.local` com a senha `teste`, e o SMTP exige login para enviar (PLAIN, LOGIN, XOAUTH2 e OAUTHBEARER). Em **Configurações → Usuário e senha** dá para cadastrar outros usuários ou aceitar qualquer usuário e senha. Em **Regras de envio e de tokens** dá para deixar o SMTP enviar sem login e validar os tokens OAuth. Em **STARTTLS e mecanismos de login** dá para desligar o STARTTLS e escolher quais mecanismos anunciar (só PLAIN, por exemplo), para imitar um servidor mais limitado.
 - **OAuth 2.0:** `authorization_code` com PKCE, `refresh_token`, `client_credentials`, `password` e `device_code`, com discovery OIDC, JWKS e rotas no estilo Microsoft (`/{tenant}/oauth2/v2.0/token`). Os tokens são JWT assinados, e os serviços de e-mail recusam token expirado, revogado ou de outro usuário.

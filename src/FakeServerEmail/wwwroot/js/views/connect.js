@@ -57,7 +57,19 @@ export default () => ({
   },
 
   get services() {
-    return this.status?.services ?? [];
+    return (this.status?.services ?? []).filter((s) => s.configuredPort > 0);
+  },
+
+  get offServices() {
+    return (this.status?.services ?? []).filter((s) => s.configuredPort <= 0).map((s) => s.name);
+  },
+
+  get readingOff() {
+    return !this.$store.app.port("POP3") && !this.$store.app.port("IMAP");
+  },
+
+  openPorts() {
+    this.$store.app.setView("settings", "portas");
   },
 
   security(s) {

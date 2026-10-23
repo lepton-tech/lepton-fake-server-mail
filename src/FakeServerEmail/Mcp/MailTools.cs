@@ -410,11 +410,11 @@ public sealed partial class MailTools(MailApiClient api)
         [Description("Tamanho máximo de mensagem em MB.")] int? maxMessageSizeMb = null,
         [Description("Porta do SMTP sem TLS (padrão 25). 0 desliga.")] int? smtpPort = null,
         [Description("Porta do SMTP de submissão (padrão 587). 0 desliga.")] int? smtpSubmissionPort = null,
-        [Description("Porta do SMTPS, TLS direto (padrão 465). 0 desliga.")] int? smtpsPort = null,
-        [Description("Porta do POP3 sem TLS (padrão 110). 0 desliga.")] int? pop3Port = null,
-        [Description("Porta do POP3S, TLS direto (padrão 995). 0 desliga.")] int? pop3sPort = null,
-        [Description("Porta do IMAP sem TLS (padrão 143). 0 desliga.")] int? imapPort = null,
-        [Description("Porta do IMAPS, TLS direto (padrão 993). 0 desliga.")] int? imapsPort = null,
+        [Description("Porta do SMTPS, TLS direto. Desligado por padrão; porta sugerida 465. 0 desliga.")] int? smtpsPort = null,
+        [Description("Porta do POP3 sem TLS. Desligado por padrão; porta sugerida 110. 0 desliga.")] int? pop3Port = null,
+        [Description("Porta do POP3S, TLS direto. Desligado por padrão; porta sugerida 995. 0 desliga.")] int? pop3sPort = null,
+        [Description("Porta do IMAP sem TLS. Desligado por padrão; porta sugerida 143. 0 desliga.")] int? imapPort = null,
+        [Description("Porta do IMAPS, TLS direto. Desligado por padrão; porta sugerida 993. 0 desliga.")] int? imapsPort = null,
         CancellationToken ct = default)
     {
         static int Port(int value, string name) =>

@@ -14,11 +14,11 @@ public sealed class AppSettings
 {
     public int SmtpPort { get; set; } = 25;
     public int SmtpSubmissionPort { get; set; } = 587;
-    public int SmtpsPort { get; set; } = 465;
-    public int Pop3Port { get; set; } = 110;
-    public int Pop3sPort { get; set; } = 995;
-    public int ImapPort { get; set; } = 143;
-    public int ImapsPort { get; set; } = 993;
+    public int SmtpsPort { get; set; }
+    public int Pop3Port { get; set; }
+    public int Pop3sPort { get; set; }
+    public int ImapPort { get; set; }
+    public int ImapsPort { get; set; }
     public int HttpPort { get; set; } = 5080;
     public int HttpsPort { get; set; } = 5443;
     public bool AllowNetworkAccess { get; set; }

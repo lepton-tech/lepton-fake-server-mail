@@ -1,17 +1,37 @@
 import { api } from "../lib/api.js";
 import { fmtDate } from "../lib/format.js";
 
-const PORTS = [
-  { key: "smtpPort", label: "SMTP", standard: 25 },
-  { key: "smtpSubmissionPort", label: "SMTP submissão", standard: 587 },
-  { key: "smtpsPort", label: "SMTPS (TLS)", standard: 465 },
-  { key: "pop3Port", label: "POP3", standard: 110 },
-  { key: "pop3sPort", label: "POP3S (TLS)", standard: 995 },
-  { key: "imapPort", label: "IMAP", standard: 143 },
-  { key: "imapsPort", label: "IMAPS (TLS)", standard: 993 },
-  { key: "httpPort", label: "Interface web (HTTP)", standard: 5080, required: true },
-  { key: "httpsPort", label: "OAuth/Web (HTTPS)", standard: 5443 },
+const PORT_GROUPS = [
+  {
+    title: "Enviar e-mails",
+    hint: "É por aqui que o aplicativo testado envia. As três opções funcionam igual neste servidor: ligue a que o aplicativo pedir. Na dúvida, deixe o SMTP e o SMTP submissão ligados. O SMTPS é o envio com criptografia desde o início.",
+    ports: [
+      { key: "smtpPort", label: "SMTP", standard: 25 },
+      { key: "smtpSubmissionPort", label: "SMTP submissão", standard: 587 },
+      { key: "smtpsPort", label: "SMTPS (com TLS)", standard: 465 },
+    ],
+  },
+  {
+    title: "Ler e-mails",
+    hint: "Só é preciso se o aplicativo testado também busca e-mails numa caixa de entrada. POP3S e IMAPS são as versões com criptografia desde o início.",
+    ports: [
+      { key: "pop3Port", label: "POP3", standard: 110 },
+      { key: "pop3sPort", label: "POP3S (com TLS)", standard: 995 },
+      { key: "imapPort", label: "IMAP", standard: 143 },
+      { key: "imapsPort", label: "IMAPS (com TLS)", standard: 993 },
+    ],
+  },
+  {
+    title: "Interface web e OAuth",
+    hint: "O HTTP é esta tela e fica sempre ligado. O HTTPS só é usado no login OAuth por bibliotecas que exigem conexão segura, como a MSAL da Microsoft.",
+    ports: [
+      { key: "httpPort", label: "Interface web (HTTP)", standard: 5080, required: true },
+      { key: "httpsPort", label: "OAuth/Web (HTTPS)", standard: 5443 },
+    ],
+  },
 ];
+
+const PORTS = PORT_GROUPS.flatMap((g) => g.ports);
 
 const MECHANISMS = [
   ["PLAIN", "Usuário e senha num passo só. O mais comum."],
@@ -25,7 +45,7 @@ let nextRowId = 1;
 const row = (username = "", password = "") => ({ id: nextRowId++, username, password });
 
 export default () => ({
-  ports: PORTS,
+  portGroups: PORT_GROUPS,
   mechanisms: MECHANISMS,
   model: null,
   off: {},
@@ -52,9 +72,14 @@ export default () => ({
     return this.$store.app.status?.certificate ?? null;
   },
 
+  suggestion(p) {
+    const port = parseInt(this.model?.[p.key], 10);
+    return port > 0 ? port : p.standard;
+  },
+
   toggle(p, on) {
     this.off[p.key] = !on;
-    if (on && !(parseInt(this.model[p.key], 10) > 0)) this.model[p.key] = p.standard;
+    if (on) this.model[p.key] = this.suggestion(p);
   },
 
   get passwordMode() {

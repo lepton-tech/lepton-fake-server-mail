@@ -171,7 +171,7 @@ static void PrintBanner(FakeMailServer server)
     Console.WriteLine();
     Console.WriteLine("  Serviço           Porta   Segurança");
     var settings = context.Settings.Current;
-    foreach (var s in server.Services)
+    foreach (var s in server.Services.Where(s => s.ConfiguredPort > 0))
     {
         var security = s.ImplicitTls ? "TLS" : !settings.OfferStartTls ? "sem TLS (STARTTLS desligado)" : s.Protocol == "POP3" ? "STLS opcional" : "STARTTLS opcional";
         Console.Write($"  {s.Name,-17} ");
@@ -188,6 +188,9 @@ static void PrintBanner(FakeMailServer server)
             Write(ConsoleColor.Yellow, s.Error ?? "parado");
         }
     }
+    var off = server.Services.Where(s => s.ConfiguredPort <= 0).Select(s => s.Name).ToList();
+    if (off.Count > 0)
+        Write(ConsoleColor.DarkGray, $"  Desligados: {string.Join(", ", off)} (dá para ligar em Configurações → Portas)");
     Console.WriteLine($"  {"OAuth 2.0",-17} {context.OpenIdConfigurationUrl}");
     Console.WriteLine($"  {"MCP (agentes)",-17} {context.HttpBaseUrl}/mcp  ou  FakeServerEmail.exe --mcp");
     Console.WriteLine();

@@ -55,6 +55,7 @@
                 </tr>
               </template>
             </table>
+            <p class="muted small" x-show="offServices.length">Desligados: <span x-text="offServices.join(', ')"></span>. Para ligar, vá em <a href="#" @click.prevent="openPorts()">Configurações → Portas</a>.</p>
             <p class="muted small">O TLS usa um certificado autoassinado: aceite certificados inválidos no cliente ou confie nele em <a href="#" @click.prevent="openCertificate()">Configurações → Certificado TLS</a>.</p>
           </div>
         </div>
@@ -78,6 +79,7 @@
 
         <div class="card">
           <h3>Ler e-mails (IMAP e POP3)</h3>
+          <p class="muted small" x-show="readingOff">O IMAP e o POP3 estão desligados. Se o aplicativo testado também busca e-mails numa caixa de entrada, ligue um deles em <a href="#" @click.prevent="openPorts()">Configurações → Portas</a>; os exemplos abaixo passam a mostrar a porta certa.</p>
           <div x-data="{ group: 'read' }" class="snippet-group">
             <div class="lang-tabs"><template x-for="lang in langs(group)" :key="lang"><button class="ghost" :class="{ active: activeLang(group) === lang }" @click="setLang(group, lang)" x-text="lang"></button></template></div>
             <div class="snippet"><button class="ghost" @click="$store.app.copy(code(group))">Copiar</button><pre x-text="code(group)"></pre></div>

@@ -86,13 +86,18 @@ public sealed class PersistenceTests
     }
 
     [Fact]
-    public async Task Padrao_exige_login_com_o_usuario_teste_cadastrado()
+    public async Task Padrao_liga_so_o_SMTP_e_exige_login_com_o_usuario_teste()
     {
         var data = Path.Combine(Path.GetTempPath(), "fse-padrao-" + Guid.NewGuid().ToString("N"));
         var smtpPort = ServerFixture.FreePort();
         var httpPort = ServerFixture.FreePort();
         try
         {
+            Directory.CreateDirectory(data);
+            var fresh = new Core.SettingsStore(data).Current;
+            Assert.Equal((25, 587), (fresh.SmtpPort, fresh.SmtpSubmissionPort));
+            Assert.All(new[] { fresh.SmtpsPort, fresh.Pop3Port, fresh.Pop3sPort, fresh.ImapPort, fresh.ImapsPort }, port => Assert.Equal(0, port));
+
             await using (var server = await FakeMailServer.StartAsync(data, s =>
             {
                 s.SmtpPort = smtpPort;

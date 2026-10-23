@@ -66,19 +66,26 @@
           <label class="check"><input type="checkbox" x-model="model.separateMailboxesByRecipient"> Separar caixas por destinatário (no POP3/IMAP, quem entra com um e-mail vê só as mensagens enviadas para ele)</label>
           <label>Tamanho máximo da mensagem (MB) <input type="number" min="1" max="1024" x-model="model.maxMessageSizeMb"></label>
         </div>
-        <div class="card">
+        <div class="card" id="portas">
           <h3>Portas</h3>
-          <p class="muted small">Desmarque os serviços que não for usar para desligá-los. Se uma porta estiver ocupada, o servidor escolhe outra automaticamente. A interface web (HTTP) fica sempre ligada.</p>
-          <div class="ports">
-            <template x-for="p in ports" :key="p.key">
-              <div class="port">
-                <label class="check" x-show="!p.required"><input type="checkbox" :checked="!off[p.key]" @change="toggle(p, $event.target.checked)"> <span x-text="p.label"></span></label>
-                <span x-show="p.required" x-text="p.label"></span>
-                <input type="number" min="1" max="65535" x-model="model[p.key]" x-show="!off[p.key]" :disabled="off[p.key]" :aria-label="'Porta: ' + p.label">
-                <input type="text" placeholder="Desligado" disabled x-show="off[p.key]" :aria-label="p.label + ' desligado'">
+          <p class="muted small">Marque só o que o aplicativo testado usa. Se uma porta estiver ocupada, o servidor escolhe outra sozinho e mostra a porta real no topo da tela.</p>
+          <template x-for="g in portGroups" :key="g.title">
+            <div class="port-group">
+              <b x-text="g.title"></b>
+              <p class="muted small" x-text="g.hint"></p>
+              <div class="ports">
+                <template x-for="p in g.ports" :key="p.key">
+                  <div class="port">
+                    <label class="check" x-show="!p.required"><input type="checkbox" :checked="!off[p.key]" @change="toggle(p, $event.target.checked)"> <span x-text="p.label"></span></label>
+                    <span x-show="p.required" x-text="p.label"></span>
+                    <input type="number" min="1" max="65535" x-model="model[p.key]" x-show="!off[p.key]" :disabled="off[p.key]" :aria-label="'Porta: ' + p.label">
+                    <input type="text" placeholder="Desligado" disabled x-show="off[p.key]" :aria-label="p.label + ' desligado'">
+                    <span class="small" x-show="off[p.key]" x-text="'Ao ligar, usa a porta ' + suggestion(p)"></span>
+                  </div>
+                </template>
               </div>
-            </template>
-          </div>
+            </div>
+          </template>
           <label class="check"><input type="checkbox" x-model="model.allowNetworkAccess"> Aceitar conexões de outras máquinas e de containers Docker (o Windows pode pedir permissão no firewall)</label>
           <label class="check"><input type="checkbox" x-model="model.openBrowserOnStart"> Abrir o navegador ao iniciar</label>
         </div>
