@@ -145,6 +145,29 @@ public sealed class McpHttpTests(ServerFixture fx)
     }
 
     [Fact]
+    public async Task Send_email_faz_login_quando_o_SMTP_exige()
+    {
+        var settings = fx.Server.Context.Settings;
+        var original = settings.Current.Clone();
+        try
+        {
+            var changed = original.Clone();
+            changed.SmtpRequireAuth = true;
+            changed.AcceptAnyPassword = true;
+            settings.Update(changed);
+
+            await using var client = await ConnectAsync();
+            var subject = "mcp-com-login-" + Guid.NewGuid();
+            var sent = await client.CallJsonAsync("send_email", new() { ["to"] = "x@teste.local", ["subject"] = subject, ["from"] = "robo@teste.local" }, _ct);
+            Assert.Equal("robo@teste.local", fx.Server.Context.Store.Get(sent.GetProperty("storedId").GetString()!)!.AuthenticatedUser);
+        }
+        finally
+        {
+            settings.Update(original);
+        }
+    }
+
+    [Fact]
     public async Task Tokens_OAuth_criados_e_revogados_pelo_MCP()
     {
         await using var client = await ConnectAsync();

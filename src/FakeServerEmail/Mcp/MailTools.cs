@@ -233,9 +233,18 @@ public sealed partial class MailTools(MailApiClient api)
         }
         message.Body = builder.ToMessageBody();
 
+        var settings = await api.GetAsync<AppSettings>("/api/settings", ct);
         using (var client = new SmtpClient())
         {
             await client.ConnectAsync("127.0.0.1", port, SecureSocketOptions.None, ct);
+            try
+            {
+                await LocalSmtpLogin.AuthenticateIfRequiredAsync(client, settings, message.From.Mailboxes.First().Address, ct);
+            }
+            catch (InvalidOperationException ex)
+            {
+                throw new McpException(ex.Message);
+            }
             await client.SendAsync(message, ct);
             await client.DisconnectAsync(true, ct);
         }

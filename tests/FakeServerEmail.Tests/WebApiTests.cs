@@ -70,6 +70,37 @@ public sealed class WebApiTests(ServerFixture fx)
     }
 
     [Fact]
+    public async Task Botao_enviar_teste_faz_login_quando_o_SMTP_exige()
+    {
+        var settings = fx.Server.Context.Settings;
+        var original = settings.Current.Clone();
+        try
+        {
+            var changed = original.Clone();
+            changed.SmtpRequireAuth = true;
+            changed.AcceptAnyPassword = false;
+            changed.Users = [new Core.UserAccount { Username = "painel@teste.local", Password = "123" }];
+            settings.Update(changed);
+
+            var subject = "botao-com-login-" + Guid.NewGuid();
+            using var http = fx.CreateHttpClient();
+            var response = await http.PostAsJsonAsync(fx.HttpBase + "/api/send-test", new { subject }, _ct);
+            Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync(_ct));
+            Assert.Equal("painel@teste.local", fx.Server.Context.Store.List().Single(m => m.Subject == subject).AuthenticatedUser);
+
+            changed.Users = [];
+            settings.Update(changed);
+            var refused = await http.PostAsJsonAsync(fx.HttpBase + "/api/send-test", new { subject = subject + "-sem-usuario" }, _ct);
+            Assert.Equal(HttpStatusCode.InternalServerError, refused.StatusCode);
+            Assert.Contains("nenhum usuário cadastrado", await refused.Content.ReadAsStringAsync(_ct));
+        }
+        finally
+        {
+            settings.Update(original);
+        }
+    }
+
+    [Fact]
     public async Task Botao_enviar_teste_usa_o_SMTP_local()
     {
         var subject = "botao-" + Guid.NewGuid();

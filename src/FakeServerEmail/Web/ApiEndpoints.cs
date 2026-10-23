@@ -141,6 +141,7 @@ public static class ApiEndpoints
             {
                 using var client = new SmtpClient();
                 await client.ConnectAsync("127.0.0.1", smtp.ActualPort!.Value, SecureSocketOptions.None);
+                await LocalSmtpLogin.AuthenticateIfRequiredAsync(client, context.Settings.Current, message.From.Mailboxes.First().Address, CancellationToken.None);
                 await client.SendAsync(message);
                 await client.DisconnectAsync(true);
                 return Results.Json(new { ok = true, port = smtp.ActualPort });
