@@ -7,9 +7,9 @@ using MimeKit.Utils;
 
 namespace FakeServerEmail.Protocols.Imap;
 
-public enum FetchKind { Uid, Flags, InternalDate, Size, Envelope, BodyStructure, Body, Section }
+internal enum FetchKind { Uid, Flags, InternalDate, Size, Envelope, BodyStructure, Body, Section }
 
-public sealed class FetchItem
+internal sealed class FetchItem
 {
     public FetchKind Kind { get; init; }
     public string Label { get; init; } = "";
@@ -23,7 +23,7 @@ public sealed class FetchItem
     public bool NeedsBody => Kind is FetchKind.Envelope or FetchKind.BodyStructure or FetchKind.Body or FetchKind.Section;
 }
 
-public static partial class ImapFetch
+internal static partial class ImapFetch
 {
     public static List<FetchItem> ParseItems(ImapToken token)
     {
@@ -88,7 +88,7 @@ public static partial class ImapFetch
             var head = dot < 0 ? rest : rest[..dot];
             if (head.Length == 0 || !head.All(char.IsAsciiDigit))
                 break;
-            path.Add(int.Parse(head, CultureInfo.InvariantCulture));
+            path.Add(ImapSyntax.RequireNumber<int>(head));
             rest = dot < 0 ? "" : rest[(dot + 1)..];
         }
 
@@ -109,9 +109,9 @@ public static partial class ImapFetch
         long? length = null;
         if (match.Groups[3].Success)
         {
-            start = long.Parse(match.Groups[4].Value, CultureInfo.InvariantCulture);
+            start = ImapSyntax.RequireNumber<long>(match.Groups[4].Value);
             if (match.Groups[5].Success)
-                length = long.Parse(match.Groups[5].Value, CultureInfo.InvariantCulture);
+                length = ImapSyntax.RequireNumber<long>(match.Groups[5].Value);
         }
 
         var normalized = string.Join('.', path.Select(p => p.ToString(CultureInfo.InvariantCulture)).Append(spec).Where(s => s.Length > 0));
@@ -131,10 +131,10 @@ public static partial class ImapFetch
         };
     }
 
-    [GeneratedRegex(@"^(BODY|BODY\.PEEK|BINARY|BINARY\.PEEK)\[(.*)\](<(\d+)(?:\.(\d+))?>)?$", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    [GeneratedRegex(@"^(BODY|BODY\.PEEK)\[(.*)\](<(\d+)(?:\.(\d+))?>)?$", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
     private static partial Regex SectionRegex();
 
-    public static byte[]? ExtractSection(byte[] raw, MimeNode root, FetchItem item)
+    public static ReadOnlyMemory<byte>? ExtractSection(byte[] raw, MimeNode root, FetchItem item)
     {
         var node = root;
         var messageContext = true;
@@ -156,34 +156,36 @@ public static partial class ImapFetch
         }
 
         var message = item.Path.Count == 0 ? root : node.Message ?? node;
-        byte[] data = item.Spec switch
+        ReadOnlyMemory<byte> data = item.Spec switch
         {
             "" when item.Path.Count == 0 => raw,
-            "" => raw[node.BodyStart..node.End],
+            "" => raw.AsMemory(node.BodyStart..node.End),
             "MIME" => HeaderBlock(raw, node),
             "HEADER" => HeaderBlock(raw, message),
-            "TEXT" => raw[message.BodyStart..message.End],
+            "TEXT" => raw.AsMemory(message.BodyStart..message.End),
             "HEADER.FIELDS" => SelectHeaders(raw, message, item.Fields, true),
             "HEADER.FIELDS.NOT" => SelectHeaders(raw, message, item.Fields, false),
-            _ => [],
+            _ => ReadOnlyMemory<byte>.Empty,
         };
 
         if (item.PartialStart is { } start)
         {
             if (start >= data.Length)
-                return [];
+                return ReadOnlyMemory<byte>.Empty;
             var length = item.PartialLength is { } l ? Math.Min(l, data.Length - start) : data.Length - start;
-            data = data.AsSpan((int)start, (int)length).ToArray();
+            data = data.Slice((int)start, (int)length);
         }
         return data;
     }
 
-    private static byte[] HeaderBlock(byte[] raw, MimeNode node)
+    private static ReadOnlyMemory<byte> HeaderBlock(byte[] raw, MimeNode node)
     {
-        var block = raw[node.Start..node.BodyStart];
-        if (block.Length >= 2 && block[^1] == '\n' && (block[^2] == '\n' || (block.Length >= 3 && block[^2] == '\r' && block[^3] == '\n')))
+        var block = raw.AsMemory(node.Start..node.BodyStart);
+        var span = block.Span;
+        if (span.Length >= 2 && span[^1] == '\n' && (span[^2] == '\n' || (span.Length >= 3 && span[^2] == '\r' && span[^3] == '\n')))
             return block;
-        return [.. block, .. "\r\n"u8];
+        byte[] terminated = [.. span, .. "\r\n"u8];
+        return terminated;
     }
 
     private static byte[] SelectHeaders(byte[] raw, MimeNode node, List<string> fields, bool include)
@@ -217,16 +219,16 @@ public static partial class ImapFetch
         string? H(string name) => message.Header(name);
         var from = H("From");
         w.Raw("(");
-        w.String(H("Date")).Space();
-        w.String(H("Subject")).Space();
+        w.NString(H("Date")).Space();
+        w.NString(H("Subject")).Space();
         WriteAddresses(w, from).Space();
         WriteAddresses(w, H("Sender") ?? from).Space();
         WriteAddresses(w, H("Reply-To") ?? from).Space();
         WriteAddresses(w, H("To")).Space();
         WriteAddresses(w, H("Cc")).Space();
         WriteAddresses(w, H("Bcc")).Space();
-        w.String(H("In-Reply-To")).Space();
-        w.String(H("Message-ID"));
+        w.NString(H("In-Reply-To")).Space();
+        w.NString(H("Message-ID"));
         w.Raw(")");
     }
 
@@ -240,7 +242,7 @@ public static partial class ImapFetch
         {
             if (address is GroupAddress group)
             {
-                w.Raw("(NIL NIL ").String(group.Name).Raw(" NIL)");
+                w.Raw("(NIL NIL ").NString(group.Name).Raw(" NIL)");
                 foreach (var member in group.Members.Mailboxes)
                     WriteMailbox(w, member);
                 w.Raw("(NIL NIL NIL NIL)");
@@ -261,7 +263,7 @@ public static partial class ImapFetch
         var at = mailbox.Address.LastIndexOf('@');
         var local = at < 0 ? mailbox.Address : mailbox.Address[..at];
         var host = at < 0 ? null : mailbox.Address[(at + 1)..];
-        w.Raw("(").String(name).Raw(" NIL ").String(local).Space().String(host).Raw(")");
+        w.Raw("(").NString(name).Raw(" NIL ").NString(local).Space().NString(host).Raw(")");
     }
 
     public static void WriteBodyStructure(ImapWriter w, MimeNode node, bool extensible)
@@ -271,23 +273,23 @@ public static partial class ImapFetch
             w.Raw("(");
             foreach (var child in node.Children)
                 WriteBodyStructure(w, child, extensible);
-            w.Space().String(node.SubType.ToUpperInvariant());
+            w.Space().NString(node.SubType.ToUpperInvariant());
             if (extensible)
             {
                 w.Space();
                 WriteParameters(w, node.Parameters);
                 w.Space();
                 WriteDisposition(w, node);
-                w.Space().String(node.Language).Space().String(node.Location);
+                w.Space().NString(node.Language).Space().NString(node.Location);
             }
             w.Raw(")");
             return;
         }
 
         w.Raw("(");
-        w.String(node.MediaType.ToUpperInvariant()).Space().String(node.SubType.ToUpperInvariant()).Space();
+        w.NString(node.MediaType.ToUpperInvariant()).Space().NString(node.SubType.ToUpperInvariant()).Space();
         WriteParameters(w, node.Parameters);
-        w.Space().String(node.ContentId).Space().String(node.Description).Space().String(node.Encoding.ToUpperInvariant()).Space().Number(node.BodyLength);
+        w.Space().NString(node.ContentId).Space().NString(node.Description).Space().NString(node.Encoding.ToUpperInvariant()).Space().Number(node.BodyLength);
 
         if (node.IsMessage && node.Message is not null)
         {
@@ -304,9 +306,9 @@ public static partial class ImapFetch
 
         if (extensible)
         {
-            w.Space().String(node.Md5).Space();
+            w.Space().NString(node.Md5).Space();
             WriteDisposition(w, node);
-            w.Space().String(node.Language).Space().String(node.Location);
+            w.Space().NString(node.Language).Space().NString(node.Location);
         }
         w.Raw(")");
     }
@@ -323,7 +325,7 @@ public static partial class ImapFetch
         {
             if (i > 0)
                 w.Space();
-            w.String(parameters[i].Name.ToUpperInvariant()).Space().String(parameters[i].Value);
+            w.NString(parameters[i].Name.ToUpperInvariant()).Space().NString(parameters[i].Value);
         }
         w.Raw(")");
     }
@@ -335,7 +337,7 @@ public static partial class ImapFetch
             w.Raw("NIL");
             return;
         }
-        w.Raw("(").String(node.Disposition.ToUpperInvariant()).Space();
+        w.Raw("(").NString(node.Disposition.ToUpperInvariant()).Space();
         WriteParameters(w, node.DispositionParameters);
         w.Raw(")");
     }

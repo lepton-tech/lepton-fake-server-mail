@@ -5,15 +5,19 @@ using ModelContextProtocol;
 
 namespace FakeServerEmail.Mcp;
 
-public sealed class MailApiClient
+public sealed class MailApiClient : IDisposable
 {
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(60) };
-    private readonly Func<Task<string?>>? _recover;
+    private const string DefaultNotFound = "Item não encontrado (o id está correto? use list_messages para ver os ids).";
+    private const string NotRunning = "O Fake Server Email não está respondendo. Abra o FakeServerEmail.exe e tente de novo.";
+    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(60);
+
+    private readonly HttpClient _http = new() { Timeout = RequestTimeout };
+    private readonly Func<CancellationToken, Task<string?>>? _recover;
     private string _baseUrl;
 
-    public MailApiClient(string baseUrl, Func<Task<string?>>? recover = null)
+    public MailApiClient(string baseUrl, Func<CancellationToken, Task<string?>>? recover = null)
     {
         _baseUrl = Normalize(baseUrl);
         _recover = recover;
@@ -21,76 +25,101 @@ public sealed class MailApiClient
 
     public string BaseUrl => _baseUrl;
 
-    public async Task<T> GetAsync<T>(string path, CancellationToken ct)
+    public async Task<T> GetAsync<T>(string path, CancellationToken ct, string? notFound = null)
     {
-        using var response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, path), ct);
-        await EnsureAsync(response, ct);
+        using var response = await SendCoreAsync(() => new HttpRequestMessage(HttpMethod.Get, path), ct);
+        await EnsureAsync(response, notFound, ct);
         return (await response.Content.ReadFromJsonAsync<T>(Json, ct))!;
     }
 
     public async Task<string?> GetStringAsync(string path, CancellationToken ct)
     {
-        using var response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, path), ct);
+        using var response = await SendCoreAsync(() => new HttpRequestMessage(HttpMethod.Get, path), ct);
         if (response.StatusCode == HttpStatusCode.NotFound)
             return null;
-        await EnsureAsync(response, ct);
+        await EnsureAsync(response, null, ct);
         return await response.Content.ReadAsStringAsync(ct);
     }
 
     public async Task<(byte[] Data, string ContentType)?> GetBytesAsync(string path, CancellationToken ct)
     {
-        using var response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, path), ct);
+        using var response = await SendCoreAsync(() => new HttpRequestMessage(HttpMethod.Get, path), ct);
         if (response.StatusCode == HttpStatusCode.NotFound)
             return null;
-        await EnsureAsync(response, ct);
+        await EnsureAsync(response, null, ct);
         return (await response.Content.ReadAsByteArrayAsync(ct), response.Content.Headers.ContentType?.MediaType ?? "application/octet-stream");
     }
 
-    public async Task<JsonElement?> SendAsync(HttpMethod method, string path, object? body, CancellationToken ct)
+    public async Task SendAsync(HttpMethod method, string path, object? body, CancellationToken ct, string? notFound = null)
     {
-        using var response = await SendAsync(() =>
-        {
-            var request = new HttpRequestMessage(method, path);
-            if (body is not null)
-                request.Content = JsonContent.Create(body, options: Json);
-            return request;
-        }, ct);
-        await EnsureAsync(response, ct);
-        if (response.Content.Headers.ContentLength == 0 || response.StatusCode == HttpStatusCode.NoContent)
-            return null;
-        return await response.Content.ReadFromJsonAsync<JsonElement>(Json, ct);
+        using var response = await SendCoreAsync(() => CreateRequest(method, path, body), ct);
+        await EnsureAsync(response, notFound, ct);
     }
 
-    private async Task<HttpResponseMessage> SendAsync(Func<HttpRequestMessage> create, CancellationToken ct)
+    public async Task<T> SendAsync<T>(HttpMethod method, string path, object? body, CancellationToken ct)
     {
-        try
-        {
-            return await _http.SendAsync(WithBase(create()), ct);
-        }
-        catch (HttpRequestException) when (_recover is not null)
-        {
-            var url = await _recover();
-            if (url is null)
-                throw new McpException("O Fake Server Email não está respondendo. Abra o FakeServerEmail.exe e tente de novo.");
-            _baseUrl = Normalize(url);
-            return await _http.SendAsync(WithBase(create()), ct);
-        }
-        catch (HttpRequestException ex)
-        {
-            throw new McpException($"Não foi possível falar com o Fake Server Email em {_baseUrl}: {ex.Message}");
-        }
+        using var response = await SendCoreAsync(() => CreateRequest(method, path, body), ct);
+        await EnsureAsync(response, null, ct);
+        return (await response.Content.ReadFromJsonAsync<T>(Json, ct))!;
     }
 
-    private HttpRequestMessage WithBase(HttpRequestMessage request)
+    public void Dispose() => _http.Dispose();
+
+    private static HttpRequestMessage CreateRequest(HttpMethod method, string path, object? body)
     {
-        request.RequestUri = new Uri(new Uri(_baseUrl), request.RequestUri!.OriginalString);
+        var request = new HttpRequestMessage(method, path);
+        if (body is not null)
+            request.Content = JsonContent.Create(body, options: Json);
         return request;
     }
 
-    private static async Task EnsureAsync(HttpResponseMessage response, CancellationToken ct)
+    private async Task<HttpResponseMessage> SendCoreAsync(Func<HttpRequestMessage> create, CancellationToken ct)
+    {
+        try
+        {
+            return await SendOnceAsync(create, ct);
+        }
+        catch (HttpRequestException) when (_recover is not null)
+        {
+            var url = await _recover(ct) ?? throw new McpException(NotRunning);
+            _baseUrl = Normalize(url);
+            try
+            {
+                return await SendOnceAsync(create, ct);
+            }
+            catch (HttpRequestException ex)
+            {
+                throw Unreachable(ex);
+            }
+        }
+        catch (HttpRequestException ex)
+        {
+            throw Unreachable(ex);
+        }
+    }
+
+    private async Task<HttpResponseMessage> SendOnceAsync(Func<HttpRequestMessage> create, CancellationToken ct)
+    {
+        using var request = create();
+        request.RequestUri = new Uri(new Uri(_baseUrl), request.RequestUri!.OriginalString);
+        try
+        {
+            return await _http.SendAsync(request, ct);
+        }
+        catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            throw new McpException($"O Fake Server Email não respondeu em {RequestTimeout.TotalSeconds:0} segundos.", ex);
+        }
+    }
+
+    private McpException Unreachable(HttpRequestException ex) => new($"Não foi possível falar com o Fake Server Email em {_baseUrl}: {ex.Message}", ex);
+
+    private static async Task EnsureAsync(HttpResponseMessage response, string? notFound, CancellationToken ct)
     {
         if (response.IsSuccessStatusCode)
             return;
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            throw new McpException(notFound ?? DefaultNotFound);
         var detail = "";
         try
         {
@@ -101,9 +130,7 @@ public sealed class MailApiClient
         catch (JsonException)
         {
         }
-        throw new McpException(response.StatusCode == HttpStatusCode.NotFound
-            ? "Item não encontrado (o id está correto? use list_messages para ver os ids)."
-            : $"O servidor respondeu {(int)response.StatusCode}: {detail}".TrimEnd(' ', ':'));
+        throw new McpException(detail.Length > 0 ? detail : $"O servidor respondeu {(int)response.StatusCode}.");
     }
 
     private static string Normalize(string url) => url.TrimEnd('/').Replace("://localhost", "://127.0.0.1", StringComparison.OrdinalIgnoreCase);

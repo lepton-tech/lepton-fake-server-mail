@@ -4,7 +4,7 @@ using MimeKit;
 
 namespace FakeServerEmail.Protocols.Imap;
 
-public sealed class SearchTarget(StoredMessage message, int sequence, long maxSequence, long maxUid, Func<byte[]?> loadRaw)
+internal sealed class SearchTarget(StoredMessage message, int sequence, long maxSequence, long maxUid, Func<byte[]?> loadRaw)
 {
     private MimeMessage? _parsed;
     private bool _loaded;
@@ -29,7 +29,7 @@ public sealed class SearchTarget(StoredMessage message, int sequence, long maxSe
                 using var ms = new MemoryStream(raw, false);
                 _parsed = MimeMessage.Load(ms);
             }
-            catch
+            catch (FormatException)
             {
                 _parsed = null;
             }
@@ -38,8 +38,10 @@ public sealed class SearchTarget(StoredMessage message, int sequence, long maxSe
     }
 }
 
-public static class ImapSearch
+internal static class ImapSearch
 {
+    private const int MaxDepth = 64;
+
     public static Func<SearchTarget, bool> Parse(List<ImapToken> tokens)
     {
         var queue = new Queue<ImapToken>(tokens);
@@ -58,21 +60,23 @@ public static class ImapSearch
 
         var keys = new List<Func<SearchTarget, bool>>();
         while (queue.Count > 0)
-            keys.Add(ParseKey(queue));
+            keys.Add(ParseKey(queue, 0));
         if (keys.Count == 0)
             throw new ImapParseException("Critério de busca vazio");
         return t => keys.All(k => k(t));
     }
 
-    private static Func<SearchTarget, bool> ParseKey(Queue<ImapToken> q)
+    private static Func<SearchTarget, bool> ParseKey(Queue<ImapToken> q, int depth)
     {
+        if (depth >= MaxDepth)
+            throw new ImapParseException("Critérios de busca aninhados demais");
         var token = q.Dequeue();
         if (token.Type == ImapTokenType.List)
         {
             var inner = new Queue<ImapToken>(token.Items);
             var keys = new List<Func<SearchTarget, bool>>();
             while (inner.Count > 0)
-                keys.Add(ParseKey(inner));
+                keys.Add(ParseKey(inner, depth + 1));
             return t => keys.All(k => k(t));
         }
 
@@ -165,22 +169,22 @@ public static class ImapSearch
                 }
             case "LARGER":
                 {
-                    var n = long.Parse(Arg(), CultureInfo.InvariantCulture);
+                    var n = ImapSyntax.RequireNumber<long>(Arg());
                     return t => t.Message.Size > n;
                 }
             case "SMALLER":
                 {
-                    var n = long.Parse(Arg(), CultureInfo.InvariantCulture);
+                    var n = ImapSyntax.RequireNumber<long>(Arg());
                     return t => t.Message.Size < n;
                 }
             case "YOUNGER":
                 {
-                    var n = long.Parse(Arg(), CultureInfo.InvariantCulture);
+                    var n = ImapSyntax.RequireNumber<long>(Arg());
                     return t => (DateTimeOffset.Now - t.Message.ReceivedAt).TotalSeconds <= n;
                 }
             case "OLDER":
                 {
-                    var n = long.Parse(Arg(), CultureInfo.InvariantCulture);
+                    var n = ImapSyntax.RequireNumber<long>(Arg());
                     return t => (DateTimeOffset.Now - t.Message.ReceivedAt).TotalSeconds > n;
                 }
             case "UID":
@@ -192,13 +196,13 @@ public static class ImapSearch
                 }
             case "NOT":
                 {
-                    var inner = ParseKey(q);
+                    var inner = ParseKey(q, depth + 1);
                     return t => !inner(t);
                 }
             case "OR":
                 {
-                    var a = ParseKey(q);
-                    var b = ParseKey(q);
+                    var a = ParseKey(q, depth + 1);
+                    var b = ParseKey(q, depth + 1);
                     return t => a(t) || b(t);
                 }
             case "MODSEQ":

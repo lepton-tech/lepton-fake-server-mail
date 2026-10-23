@@ -12,9 +12,9 @@ public sealed class Pop3Tests(ServerFixture fx)
     public async Task Lista_baixa_e_apaga_mensagens()
     {
         var subject = "pop3-" + Guid.NewGuid();
-        await fx.SendAsync(ServerFixture.Simple(subject));
+        await fx.SendAsync(ServerFixture.Simple(subject), _ct);
 
-        using var client = new Pop3Client { ServerCertificateValidationCallback = (_, _, _, _) => true };
+        using var client = new Pop3Client { ServerCertificateValidationCallback = fx.IsServerCertificate };
         await client.ConnectAsync("127.0.0.1", fx.Pop3, SecureSocketOptions.StartTls, _ct);
         Assert.True(client.IsSecure);
         await client.AuthenticateAsync("pop@teste.local", "x", _ct);
@@ -39,7 +39,7 @@ public sealed class Pop3Tests(ServerFixture fx)
     [Fact]
     public async Task Pop3s_com_USER_PASS()
     {
-        using var client = new Pop3Client { ServerCertificateValidationCallback = (_, _, _, _) => true };
+        using var client = new Pop3Client { ServerCertificateValidationCallback = fx.IsServerCertificate };
         await client.ConnectAsync("127.0.0.1", fx.Pop3s, SecureSocketOptions.SslOnConnect, _ct);
         client.AuthenticationMechanisms.Clear();
         await client.AuthenticateAsync("usuario", "senha", _ct);
@@ -51,30 +51,22 @@ public sealed class Pop3Tests(ServerFixture fx)
     [Fact]
     public async Task Sem_STLS_e_so_PLAIN_quando_configurado()
     {
-        var settings = fx.Server.Context.Settings;
-        var original = settings.Current.Clone();
-        try
+        using var settings = fx.OverrideSettings(s =>
         {
-            var changed = original.Clone();
-            changed.OfferStartTls = false;
-            changed.AuthMechanisms = ["PLAIN"];
-            settings.Update(changed);
+            s.OfferStartTls = false;
+            s.AuthMechanisms = ["PLAIN"];
+        });
 
-            using (var strict = new Pop3Client())
-                await Assert.ThrowsAsync<NotSupportedException>(() => strict.ConnectAsync("127.0.0.1", fx.Pop3, SecureSocketOptions.StartTls, _ct));
+        using (var strict = new Pop3Client())
+            await Assert.ThrowsAsync<NotSupportedException>(() => strict.ConnectAsync("127.0.0.1", fx.Pop3, SecureSocketOptions.StartTls, _ct));
 
-            var user = "pop-plain-" + Guid.NewGuid().ToString("N") + "@teste.local";
-            using var client = new Pop3Client();
-            await client.ConnectAsync("127.0.0.1", fx.Pop3, SecureSocketOptions.StartTlsWhenAvailable, _ct);
-            Assert.False(client.IsSecure);
-            Assert.Equal("PLAIN", Assert.Single(client.AuthenticationMechanisms));
-            await client.AuthenticateAsync(user, "x", _ct);
-            await client.DisconnectAsync(true, _ct);
-            Assert.Equal("PLAIN", fx.Server.Context.Log.List().Single(s => s.User == user).AuthMechanism);
-        }
-        finally
-        {
-            settings.Update(original);
-        }
+        var user = "pop-plain-" + Guid.NewGuid().ToString("N") + "@teste.local";
+        using var client = new Pop3Client();
+        await client.ConnectAsync("127.0.0.1", fx.Pop3, SecureSocketOptions.StartTlsWhenAvailable, _ct);
+        Assert.False(client.IsSecure);
+        Assert.Equal("PLAIN", Assert.Single(client.AuthenticationMechanisms));
+        await client.AuthenticateAsync(user, "x", _ct);
+        await client.DisconnectAsync(true, _ct);
+        Assert.Equal("PLAIN", fx.Server.Context.Log.List().Single(s => s.User == user).AuthMechanism);
     }
 }

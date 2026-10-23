@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -12,8 +13,70 @@ public sealed class ImapHandler(ServerContext context, bool allowStartTls) : IPr
     public Task HandleAsync(MailConnection connection, CancellationToken ct) => new ImapSession(context, connection, allowStartTls).RunAsync(ct);
 }
 
-internal sealed class ImapSession(ServerContext context, MailConnection c, bool allowStartTls)
+internal sealed partial class ImapSession(ServerContext context, MailConnection c, bool allowStartTls)
 {
+    private const int UnauthenticatedLiteralLimit = 64 * 1024;
+    private const int IdleLineLimit = 8192;
+    private const int StructureCacheSize = 200;
+    private static readonly TimeSpan SessionIdleTimeout = TimeSpan.FromMinutes(31);
+    private static readonly TimeSpan IdleKeepAlive = TimeSpan.FromMinutes(25);
+
+    private enum Access { Any, Authenticated, Selected }
+
+    private readonly record struct Call(string Tag, string Name, ImapTokenizer Args, bool Uid, CancellationToken Ct);
+
+    private sealed record Command(Access Access, bool AllowsUid, Func<ImapSession, Call, Task<bool>> Run)
+    {
+        public static Command Of(Access access, Action<ImapSession, Call> run, bool allowsUid = false) =>
+            new(access, allowsUid, (session, call) =>
+            {
+                run(session, call);
+                return Task.FromResult(true);
+            });
+
+        public static Command OfAsync(Access access, Func<ImapSession, Call, Task> run, bool allowsUid = false) =>
+            new(access, allowsUid, async (session, call) =>
+            {
+                await run(session, call);
+                return true;
+            });
+    }
+
+    private static readonly FrozenDictionary<string, Command> Commands = new Dictionary<string, Command>
+    {
+        ["CAPABILITY"] = Command.Of(Access.Any, static (s, call) => s.Capability(call.Tag)),
+        ["NOOP"] = Command.Of(Access.Any, static (s, call) => s.Noop(call.Tag)),
+        ["LOGOUT"] = new(Access.Any, false, static (s, call) => Task.FromResult(s.Logout(call.Tag))),
+        ["ID"] = Command.Of(Access.Any, static (s, call) => s.Id(call.Tag)),
+        ["STARTTLS"] = Command.OfAsync(Access.Any, static (s, call) => s.StartTlsAsync(call.Tag, call.Ct)),
+        ["LOGIN"] = Command.Of(Access.Any, static (s, call) => s.Login(call.Tag, call.Args)),
+        ["AUTHENTICATE"] = Command.OfAsync(Access.Any, static (s, call) => s.AuthenticateAsync(call.Tag, call.Args, call.Ct)),
+        ["SELECT"] = Command.Of(Access.Authenticated, static (s, call) => s.Select(call.Tag, call.Args, false)),
+        ["EXAMINE"] = Command.Of(Access.Authenticated, static (s, call) => s.Select(call.Tag, call.Args, true)),
+        ["CREATE"] = Command.Of(Access.Authenticated, static (s, call) => s.Create(call.Tag, call.Args)),
+        ["DELETE"] = Command.Of(Access.Authenticated, static (s, call) => s.Delete(call.Tag, call.Args)),
+        ["RENAME"] = Command.Of(Access.Authenticated, static (s, call) => s.Rename(call.Tag, call.Args)),
+        ["SUBSCRIBE"] = Command.Of(Access.Authenticated, static (s, call) => s.Subscribe(call.Tag, call.Name, call.Args)),
+        ["UNSUBSCRIBE"] = Command.Of(Access.Authenticated, static (s, call) => s.Subscribe(call.Tag, call.Name, call.Args)),
+        ["LIST"] = Command.Of(Access.Authenticated, static (s, call) => s.List(call.Tag, call.Args, call.Name)),
+        ["LSUB"] = Command.Of(Access.Authenticated, static (s, call) => s.List(call.Tag, call.Args, call.Name)),
+        ["STATUS"] = Command.Of(Access.Authenticated, static (s, call) => s.Status(call.Tag, call.Args)),
+        ["APPEND"] = Command.Of(Access.Authenticated, static (s, call) => s.Append(call.Tag, call.Args)),
+        ["NAMESPACE"] = Command.Of(Access.Authenticated, static (s, call) => s.Namespace(call.Tag)),
+        ["ENABLE"] = Command.Of(Access.Authenticated, static (s, call) => s.Enable(call.Tag)),
+        ["IDLE"] = new(Access.Authenticated, false, static (s, call) => s.IdleAsync(call.Tag, call.Ct)),
+        ["CHECK"] = Command.Of(Access.Selected, static (s, call) => s.Check(call.Tag)),
+        ["CLOSE"] = Command.Of(Access.Selected, static (s, call) => s.Close(call.Tag)),
+        ["UNSELECT"] = Command.Of(Access.Selected, static (s, call) => s.Unselect(call.Tag)),
+        ["EXPUNGE"] = Command.Of(Access.Selected, static (s, call) => s.Expunge(call.Tag, call.Args, call.Uid), allowsUid: true),
+        ["SEARCH"] = Command.Of(Access.Selected, static (s, call) => s.Search(call.Tag, call.Args, call.Uid), allowsUid: true),
+        ["FETCH"] = Command.OfAsync(Access.Selected, static (s, call) => s.FetchAsync(call.Tag, call.Args, call.Uid, call.Ct), allowsUid: true),
+        ["STORE"] = Command.Of(Access.Selected, static (s, call) => s.Store(call.Tag, call.Args, call.Uid), allowsUid: true),
+        ["COPY"] = Command.Of(Access.Selected, static (s, call) => s.CopyOrMove(call.Tag, call.Args, call.Uid, false), allowsUid: true),
+        ["MOVE"] = Command.Of(Access.Selected, static (s, call) => s.CopyOrMove(call.Tag, call.Args, call.Uid, true), allowsUid: true),
+        ["UID"] = new(Access.Selected, false, static (s, call) => s.UidAsync(call)),
+    }.ToFrozenDictionary(StringComparer.Ordinal);
+
     private sealed class Selected
     {
         public required string Name { get; set; }
@@ -41,16 +104,22 @@ internal sealed class ImapSession(ServerContext context, MailConnection c, bool 
                 var settings = context.Settings.Current;
                 foreach (var m in settings.AuthMechanisms)
                     sb.Append(" AUTH=").Append(m);
-                if (allowStartTls && settings.OfferStartTls && !c.IsSecure)
+                if (c.CanStartTls(allowStartTls, settings))
                     sb.Append(" STARTTLS");
             }
             return sb.ToString();
         }
     }
 
+    private long LiteralLimit => _user is null ? UnauthenticatedLiteralLimit : context.Settings.Current.MaxMessageBytes();
+
+    private string LiteralLimitText => _user is null
+        ? $"Dados grandes demais antes do login (limite de {UnauthenticatedLiteralLimit / 1024} KB)"
+        : $"Dados grandes demais (limite de {context.Settings.Current.MaxMessageSizeMb} MB)";
+
     public async Task RunAsync(CancellationToken ct)
     {
-        c.IdleTimeout = TimeSpan.FromMinutes(31);
+        c.IdleTimeout = SessionIdleTimeout;
         context.Store.Changed += OnStoreChanged;
         try
         {
@@ -60,12 +129,23 @@ internal sealed class ImapSession(ServerContext context, MailConnection c, bool 
                 ImapCommand? command;
                 try
                 {
-                    command = await ImapCommand.ReadAsync(c, () => c.SendLineAsync("+ Pronto para receber", ct), ct);
+                    command = await ImapCommand.ReadAsync(c, () => c.SendLineAsync("+ Pronto para receber", ct), LiteralLimit, ct);
                 }
                 catch (LineTooLongException)
                 {
                     await c.SendLineAsync("* BYE Linha muito longa", ct);
                     return;
+                }
+                catch (ImapLiteralTooBigException ex)
+                {
+                    _log.FromClient($"{ex.Tag} [literal de {ex.Size} bytes recusado]");
+                    if (!ex.Synchronizing)
+                    {
+                        await c.SendLineAsync($"* BYE [TOOBIG] {LiteralLimitText}", ct);
+                        return;
+                    }
+                    await c.SendLineAsync($"{ex.Tag} NO [TOOBIG] {LiteralLimitText}", ct);
+                    continue;
                 }
                 if (command is null)
                     return;
@@ -88,7 +168,12 @@ internal sealed class ImapSession(ServerContext context, MailConnection c, bool 
                     continue;
                 }
 
-                _log.FromClient(name == "LOGIN" ? $"{tag} LOGIN ********" : command.LogText);
+                _log.FromClient(name switch
+                {
+                    "LOGIN" => $"{tag} LOGIN ********",
+                    "AUTHENTICATE" => $"{tag} AUTHENTICATE {Sasl.MaskArguments(t.Remaining)}".TrimEnd(),
+                    _ => command.LogText,
+                });
                 if (name is null)
                 {
                     await c.SendLineAsync($"{tag} BAD Comando ausente", ct);
@@ -100,7 +185,7 @@ internal sealed class ImapSession(ServerContext context, MailConnection c, bool 
                 {
                     keepGoing = await DispatchAsync(tag, name, t, ct);
                 }
-                catch (Exception ex) when (ex is ImapParseException or FormatException or OverflowException)
+                catch (ImapParseException ex)
                 {
                     c.WriteLine($"{tag} BAD {ex.Message}");
                 }
@@ -128,144 +213,70 @@ internal sealed class ImapSession(ServerContext context, MailConnection c, bool 
 
     private async Task<bool> DispatchAsync(string tag, string name, ImapTokenizer t, CancellationToken ct)
     {
-        switch (name)
+        if (!Commands.TryGetValue(name, out var command))
         {
-            case "CAPABILITY":
-                Untagged("CAPABILITY " + Capabilities);
-                Ok(tag, "CAPABILITY concluído");
-                return true;
-            case "NOOP":
-                Sync(true);
-                Ok(tag, "NOOP concluído");
-                return true;
-            case "LOGOUT":
-                Untagged("BYE Até logo");
-                Ok(tag, "LOGOUT concluído");
-                return false;
-            case "ID":
-                Untagged("ID (\"name\" \"Fake Server Email\" \"version\" \"1.0\" \"vendor\" \"Fake Server Email\")");
-                Ok(tag, "ID concluído");
-                return true;
-            case "STARTTLS":
-                if (!allowStartTls || !context.Settings.Current.OfferStartTls || c.IsSecure || _user is not null)
-                {
-                    Bad(tag, "STARTTLS não disponível");
-                    return true;
-                }
-                await c.SendLineAsync($"{tag} OK Iniciando TLS", ct);
-                await c.UpgradeToTlsAsync(ct);
-                _log.Secure = true;
-                return true;
-            case "LOGIN":
-                Login(tag, t);
-                return true;
-            case "AUTHENTICATE":
-                await AuthenticateAsync(tag, t, ct);
-                return true;
-        }
-
-        if (_user is null)
-        {
-            Bad(tag, IsKnownCommand(name) ? "Autentique-se primeiro" : "Comando desconhecido");
+            Bad(tag, "Comando desconhecido");
             return true;
         }
-
-        switch (name)
+        if (command.Access != Access.Any && _user is null)
         {
-            case "SELECT":
-            case "EXAMINE":
-                Select(tag, t, name == "EXAMINE");
-                return true;
-            case "CREATE":
-                Create(tag, t);
-                return true;
-            case "DELETE":
-                Delete(tag, t);
-                return true;
-            case "RENAME":
-                Rename(tag, t);
-                return true;
-            case "SUBSCRIBE":
-            case "UNSUBSCRIBE":
-                t.RequireAString("pasta");
-                Ok(tag, $"{name} concluído");
-                return true;
-            case "LIST":
-            case "LSUB":
-                List(tag, t, name);
-                return true;
-            case "STATUS":
-                Status(tag, t);
-                return true;
-            case "APPEND":
-                Append(tag, t);
-                return true;
-            case "NAMESPACE":
-                Untagged("NAMESPACE ((\"\" \"/\")) NIL NIL");
-                Ok(tag, "NAMESPACE concluído");
-                return true;
-            case "ENABLE":
-                Untagged("ENABLED");
-                Ok(tag, "ENABLE concluído");
-                return true;
-            case "IDLE":
-                return await IdleAsync(tag, ct);
-        }
-
-        if (_selected is null)
-        {
-            Bad(tag, IsKnownCommand(name) ? "Nenhuma pasta selecionada" : "Comando desconhecido");
+            Bad(tag, "Autentique-se primeiro");
             return true;
         }
-
-        var uid = false;
-        if (name == "UID")
+        if (command.Access == Access.Selected && _selected is null)
         {
-            uid = true;
-            name = t.Require("comando UID").Upper;
+            Bad(tag, "Nenhuma pasta selecionada");
+            return true;
         }
-
-        switch (name)
-        {
-            case "CHECK" when !uid:
-                Sync(true);
-                Ok(tag, "CHECK concluído");
-                return true;
-            case "CLOSE" when !uid:
-                if (!_selected.ReadOnly)
-                    context.Store.Delete(Entries(null, false).Where(e => HasDeleted(e.Id)).Select(e => e.Id).ToList());
-                _selected = null;
-                Ok(tag, "CLOSE concluído");
-                return true;
-            case "UNSELECT" when !uid:
-                _selected = null;
-                Ok(tag, "UNSELECT concluído");
-                return true;
-            case "EXPUNGE":
-                Expunge(tag, t, uid);
-                return true;
-            case "SEARCH":
-                Search(tag, t, uid);
-                return true;
-            case "FETCH":
-                await FetchAsync(tag, t, uid, ct);
-                return true;
-            case "STORE":
-                Store(tag, t, uid);
-                return true;
-            case "COPY":
-            case "MOVE":
-                CopyOrMove(tag, t, uid, name == "MOVE");
-                return true;
-        }
-
-        Bad(tag, "Comando desconhecido");
-        return true;
+        return await command.Run(this, new Call(tag, name, t, false, ct));
     }
 
-    private static bool IsKnownCommand(string name) => name is "SELECT" or "EXAMINE" or "CREATE" or "DELETE" or "RENAME" or "SUBSCRIBE"
-        or "UNSUBSCRIBE" or "LIST" or "LSUB" or "STATUS" or "APPEND" or "NAMESPACE" or "ENABLE" or "IDLE" or "CHECK" or "CLOSE"
-        or "UNSELECT" or "EXPUNGE" or "SEARCH" or "FETCH" or "STORE" or "COPY" or "MOVE" or "UID";
+    private Task<bool> UidAsync(Call call)
+    {
+        var name = call.Args.Require("comando UID").Upper;
+        if (!Commands.TryGetValue(name, out var command) || !command.AllowsUid)
+        {
+            Bad(call.Tag, "Comando desconhecido");
+            return Task.FromResult(true);
+        }
+        return command.Run(this, call with { Name = name, Uid = true });
+    }
+
+    private void Capability(string tag)
+    {
+        Untagged("CAPABILITY " + Capabilities);
+        Ok(tag, "CAPABILITY concluído");
+    }
+
+    private void Noop(string tag)
+    {
+        Sync(true);
+        Ok(tag, "NOOP concluído");
+    }
+
+    private bool Logout(string tag)
+    {
+        Untagged("BYE Até logo");
+        Ok(tag, "LOGOUT concluído");
+        return false;
+    }
+
+    private void Id(string tag)
+    {
+        Untagged("ID (\"name\" \"Fake Server Email\" \"version\" \"1.0\" \"vendor\" \"Fake Server Email\")");
+        Ok(tag, "ID concluído");
+    }
+
+    private async Task StartTlsAsync(string tag, CancellationToken ct)
+    {
+        if (!c.CanStartTls(allowStartTls, context.Settings.Current) || _user is not null)
+        {
+            Bad(tag, "STARTTLS não disponível");
+            return;
+        }
+        await c.SendLineAsync($"{tag} OK Iniciando TLS", ct);
+        await c.UpgradeToTlsAsync(ct);
+    }
 
     private void Login(string tag, ImapTokenizer t)
     {
@@ -302,15 +313,7 @@ internal sealed class ImapSession(ServerContext context, MailConnection c, bool 
             return;
         }
 
-        var outcome = await Sasl.AuthenticateAsync(mechanism, initial, async challenge =>
-        {
-            await c.SendLineAsync("+ " + challenge, ct);
-            var response = await c.ReadLineAsync(ct, 64 * 1024);
-            if (response is not null)
-                _log.FromClient(response);
-            return response;
-        }, context.Authenticator, context.OpenIdConfigurationUrl);
-
+        var outcome = await Sasl.ExchangeAsync(c, context, mechanism, initial, "+ ", ct);
         if (outcome.Success)
         {
             SetUser(outcome.User ?? "", outcome.Mechanism);
@@ -322,7 +325,6 @@ internal sealed class ImapSession(ServerContext context, MailConnection c, bool 
         }
         else
         {
-            _log.Info($"Falha na autenticação {outcome.Mechanism}: {outcome.Error}");
             No(tag, "[AUTHENTICATIONFAILED] Falha na autenticação: " + outcome.Error);
         }
     }
@@ -330,9 +332,45 @@ internal sealed class ImapSession(ServerContext context, MailConnection c, bool 
     private void SetUser(string user, string mechanism)
     {
         _user = user;
-        _log.User = user;
-        _log.AuthMechanism = mechanism;
-        _log.Info($"Autenticado como '{user}' via {mechanism}");
+        _log.MarkAuthenticated(user, mechanism);
+    }
+
+    private void Subscribe(string tag, string name, ImapTokenizer t)
+    {
+        t.RequireAString("pasta");
+        Ok(tag, $"{name} concluído");
+    }
+
+    private void Namespace(string tag)
+    {
+        Untagged("NAMESPACE ((\"\" \"/\")) NIL NIL");
+        Ok(tag, "NAMESPACE concluído");
+    }
+
+    private void Enable(string tag)
+    {
+        Untagged("ENABLED");
+        Ok(tag, "ENABLE concluído");
+    }
+
+    private void Check(string tag)
+    {
+        Sync(true);
+        Ok(tag, "CHECK concluído");
+    }
+
+    private void Close(string tag)
+    {
+        if (!_selected!.ReadOnly)
+            context.Store.Delete(Entries(null, false).Where(e => HasDeleted(e.Id)).Select(e => e.Id).ToList());
+        _selected = null;
+        Ok(tag, "CLOSE concluído");
+    }
+
+    private void Unselect(string tag)
+    {
+        _selected = null;
+        Ok(tag, "UNSELECT concluído");
     }
 
     private List<StoredMessage> View(string folder)
@@ -469,98 +507,116 @@ internal sealed class ImapSession(ServerContext context, MailConnection c, bool 
         var needsBody = items.Any(i => i.NeedsBody);
         var setsSeen = !_selected!.ReadOnly && items.Any(ImapFetch.SetsSeen);
         var labels = string.Join(' ', items.Select(i => i.Kind == FetchKind.Section ? i.Label : i.Kind.ToString().ToUpperInvariant()));
+        var seen = new List<Entry>();
 
-        foreach (var entry in Entries(set, byUid))
+        try
         {
-            var message = context.Store.Get(entry.Id);
-            if (message is null)
-                continue;
-
-            byte[]? raw = null;
-            MimeNode? root = null;
-            if (needsBody)
+            foreach (var entry in Entries(set, byUid))
             {
-                raw = context.Store.GetRaw(entry.Id);
-                if (raw is null)
+                var message = context.Store.Get(entry.Id);
+                if (message is null)
                     continue;
-                root = Structure(entry.Id, raw);
-            }
 
-            var markSeen = setsSeen && !message.HasFlag(ImapFlags.Seen);
-            if (markSeen)
-            {
-                context.Store.SetSeen([entry.Id], true);
-                message = context.Store.Get(entry.Id) ?? message;
-                _selected.FlagState[entry.Uid] = FlagKey(message);
-            }
-
-            var w = new ImapWriter();
-            w.Raw($"* {entry.Sequence} FETCH (");
-            var first = true;
-            var flagsWritten = false;
-            void Separator()
-            {
-                if (!first)
-                    w.Space();
-                first = false;
-            }
-
-            foreach (var item in items)
-            {
-                Separator();
-                switch (item.Kind)
+                byte[]? raw = null;
+                MimeNode? root = null;
+                if (needsBody)
                 {
-                    case FetchKind.Uid:
-                        w.Raw("UID ").Number(entry.Uid);
-                        break;
-                    case FetchKind.Flags:
-                        w.Raw("FLAGS " + ImapFetch.FormatFlags(message.Flags));
-                        flagsWritten = true;
-                        break;
-                    case FetchKind.InternalDate:
-                        w.Raw("INTERNALDATE ").String(ImapFetch.FormatInternalDate(message.ReceivedAt));
-                        break;
-                    case FetchKind.Size:
-                        w.Raw("RFC822.SIZE ").Number(message.Size);
-                        break;
-                    case FetchKind.Envelope:
-                        w.Raw("ENVELOPE ");
-                        ImapFetch.WriteEnvelope(w, root!);
-                        break;
-                    case FetchKind.BodyStructure:
-                        w.Raw("BODYSTRUCTURE ");
-                        ImapFetch.WriteBodyStructure(w, root!, true);
-                        break;
-                    case FetchKind.Body:
-                        w.Raw("BODY ");
-                        ImapFetch.WriteBodyStructure(w, root!, false);
-                        break;
-                    case FetchKind.Section:
-                        var data = ImapFetch.ExtractSection(raw!, root!, item);
-                        w.Raw(item.Label + " ");
-                        if (data is null)
-                            w.Raw("NIL");
-                        else
-                            w.Literal(data);
-                        break;
+                    raw = context.Store.GetRaw(entry.Id);
+                    if (raw is null)
+                        continue;
+                    root = Structure(entry.Id, raw);
                 }
-            }
 
-            if (markSeen && !flagsWritten)
-            {
-                Separator();
-                w.Raw("FLAGS " + ImapFetch.FormatFlags(message.Flags));
-            }
-            w.Raw(")\r\n");
-            c.Write(w.ToArray());
-            _log.FromServer($"* {entry.Sequence} FETCH ({labels}) [{w.Length} bytes]");
+                var markSeen = setsSeen && !message.HasFlag(ImapFlags.Seen);
+                if (markSeen)
+                    seen.Add(entry);
 
-            if (c.PendingOutput > 1024 * 1024)
-                await c.FlushAsync(ct);
+                using var w = new ImapWriter();
+                WriteFetchResponse(w, entry, message, items, raw, root, markSeen);
+                c.Write(w.Written);
+                _log.FromServer($"* {entry.Sequence} FETCH ({labels}) [{w.Length} bytes]");
+                await c.FlushIfLargeAsync(ct);
+            }
+        }
+        finally
+        {
+            MarkSeen(seen);
         }
 
         Sync(byUid);
         Ok(tag, (byUid ? "UID " : "") + "FETCH concluído");
+    }
+
+    private void MarkSeen(List<Entry> entries)
+    {
+        if (entries.Count == 0)
+            return;
+        context.Store.SetSeen(entries.Select(e => e.Id), true);
+        foreach (var entry in entries)
+        {
+            if (context.Store.Get(entry.Id) is { } updated)
+                _selected!.FlagState[entry.Uid] = FlagKey(updated);
+        }
+    }
+
+    private static void WriteFetchResponse(ImapWriter w, Entry entry, StoredMessage message, List<FetchItem> items, byte[]? raw, MimeNode? root, bool markSeen)
+    {
+        List<string> flags = markSeen ? [.. message.Flags, ImapFlags.Seen] : message.Flags;
+        w.Raw($"* {entry.Sequence} FETCH (");
+        var flagsWritten = false;
+        for (var i = 0; i < items.Count; i++)
+        {
+            if (i > 0)
+                w.Space();
+            WriteFetchItem(w, items[i], entry, message, flags, raw, root);
+            flagsWritten |= items[i].Kind == FetchKind.Flags;
+        }
+        if (markSeen && !flagsWritten)
+        {
+            if (items.Count > 0)
+                w.Space();
+            w.Raw("FLAGS " + ImapFetch.FormatFlags(flags));
+        }
+        w.Raw(")\r\n");
+    }
+
+    private static void WriteFetchItem(ImapWriter w, FetchItem item, Entry entry, StoredMessage message, List<string> flags, byte[]? raw, MimeNode? root)
+    {
+        switch (item.Kind)
+        {
+            case FetchKind.Uid:
+                w.Raw("UID ").Number(entry.Uid);
+                break;
+            case FetchKind.Flags:
+                w.Raw("FLAGS " + ImapFetch.FormatFlags(flags));
+                break;
+            case FetchKind.InternalDate:
+                w.Raw("INTERNALDATE ").NString(ImapFetch.FormatInternalDate(message.ReceivedAt));
+                break;
+            case FetchKind.Size:
+                w.Raw("RFC822.SIZE ").Number(message.Size);
+                break;
+            case FetchKind.Envelope:
+                w.Raw("ENVELOPE ");
+                ImapFetch.WriteEnvelope(w, root!);
+                break;
+            case FetchKind.BodyStructure:
+                w.Raw("BODYSTRUCTURE ");
+                ImapFetch.WriteBodyStructure(w, root!, true);
+                break;
+            case FetchKind.Body:
+                w.Raw("BODY ");
+                ImapFetch.WriteBodyStructure(w, root!, false);
+                break;
+            case FetchKind.Section:
+                var data = ImapFetch.ExtractSection(raw!, root!, item);
+                w.Raw(item.Label + " ");
+                if (data is { } section)
+                    w.Literal(section.Span);
+                else
+                    w.Raw("NIL");
+                break;
+        }
     }
 
     private MimeNode Structure(string id, byte[] raw)
@@ -568,7 +624,7 @@ internal sealed class ImapSession(ServerContext context, MailConnection c, bool 
         if (_structureCache.TryGetValue(id, out var cached))
             return cached;
         var node = MimeStructure.Parse(raw);
-        if (_structureCache.Count > 200)
+        if (_structureCache.Count > StructureCacheSize)
             _structureCache.Clear();
         _structureCache[id] = node;
         return node;
@@ -778,6 +834,11 @@ internal sealed class ImapSession(ServerContext context, MailConnection c, bool 
     {
         var from = ImapUtf7.Decode(t.RequireAString("pasta de origem"));
         var to = ImapUtf7.Decode(t.RequireAString("novo nome")).TrimEnd('/');
+        if (to.Length == 0)
+        {
+            No(tag, "Nome de pasta inválido");
+            return;
+        }
         var folder = context.Store.ResolveFolder(from);
         if (folder is null)
         {
@@ -819,11 +880,11 @@ internal sealed class ImapSession(ServerContext context, MailConnection c, bool 
             return;
         }
 
-        var regexes = patterns.Select(p => PatternRegex(ImapUtf7.Decode(reference + p))).ToList();
+        var decoded = patterns.Select(p => ImapUtf7.Decode(reference + p)).ToList();
         var folders = context.Store.Folders;
         foreach (var folder in folders)
         {
-            if (!regexes.Any(r => r.IsMatch(folder)))
+            if (!decoded.Any(p => ImapSyntax.MatchesMailboxPattern(p, folder)))
                 continue;
             var attributes = new List<string>
             {
@@ -835,27 +896,11 @@ internal sealed class ImapSession(ServerContext context, MailConnection c, bool 
             else if (specialOnly)
                 continue;
 
-            var w = new ImapWriter();
-            w.Raw($"{verb} ({string.Join(' ', attributes)}) \"/\" ").String(ImapUtf7.Encode(folder));
-            Untagged(Encoding.UTF8.GetString(w.ToArray()));
+            using var w = new ImapWriter();
+            w.Raw($"{verb} ({string.Join(' ', attributes)}) \"/\" ").NString(ImapUtf7.Encode(folder));
+            Untagged(Encoding.UTF8.GetString(w.Written));
         }
         Ok(tag, $"{verb} concluído");
-    }
-
-    private static Regex PatternRegex(string pattern)
-    {
-        var sb = new StringBuilder("^");
-        foreach (var ch in pattern)
-        {
-            sb.Append(ch switch
-            {
-                '*' => ".*",
-                '%' => "[^/]*",
-                _ => Regex.Escape(ch.ToString()),
-            });
-        }
-        sb.Append('$');
-        return new Regex(sb.ToString(), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
     private void Status(string tag, ImapTokenizer t)
@@ -883,9 +928,9 @@ internal sealed class ImapSession(ServerContext context, MailConnection c, bool 
                 case "SIZE": values.Add($"SIZE {view.Sum(m => m.Size)}"); break;
             }
         }
-        var w = new ImapWriter();
-        w.Raw("STATUS ").String(ImapUtf7.Encode(folder)).Raw($" ({string.Join(' ', values)})");
-        Untagged(Encoding.UTF8.GetString(w.ToArray()));
+        using var w = new ImapWriter();
+        w.Raw("STATUS ").NString(ImapUtf7.Encode(folder)).Raw($" ({string.Join(' ', values)})");
+        Untagged(Encoding.UTF8.GetString(w.Written));
         Ok(tag, "STATUS concluído");
     }
 
@@ -902,7 +947,7 @@ internal sealed class ImapSession(ServerContext context, MailConnection c, bool 
             flags = token.Items.Select(i => NormalizeFlag(i.Text)).Where(f => !f.Equals("\\Recent", StringComparison.OrdinalIgnoreCase)).ToList();
             token = t.Require("mensagem");
         }
-        if (token.Bytes is null && token.Type == ImapTokenType.String)
+        if (token.Bytes is null && token.Type == ImapTokenType.Quoted)
         {
             date = ParseInternalDate(token.Text);
             token = t.Require("mensagem");
@@ -915,8 +960,7 @@ internal sealed class ImapSession(ServerContext context, MailConnection c, bool 
         }
 
         var bytes = token.Bytes ?? Encoding.UTF8.GetBytes(token.Text);
-        var maxSize = context.Settings.Current.MaxMessageSizeMb * 1024L * 1024L;
-        if (bytes.Length > maxSize)
+        if (bytes.Length > context.Settings.Current.MaxMessageBytes())
         {
             No(tag, "[TOOBIG] Mensagem muito grande");
             return;
@@ -930,39 +974,62 @@ internal sealed class ImapSession(ServerContext context, MailConnection c, bool 
 
     private static DateTimeOffset? ParseInternalDate(string text)
     {
-        var match = Regex.Match(text.Trim(), @"^(\d{1,2})-([A-Za-z]{3})-(\d{4}) (\d{2}):(\d{2}):(\d{2}) ([+-])(\d{2})(\d{2})$");
+        var match = InternalDateRegex().Match(text.Trim());
         if (!match.Success)
             return null;
         var normalized = $"{match.Groups[1].Value.PadLeft(2, '0')}-{match.Groups[2].Value}-{match.Groups[3].Value} {match.Groups[4].Value}:{match.Groups[5].Value}:{match.Groups[6].Value} {match.Groups[7].Value}{match.Groups[8].Value}:{match.Groups[9].Value}";
         return DateTimeOffset.TryParseExact(normalized, "dd-MMM-yyyy HH:mm:ss zzz", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d) ? d : null;
     }
 
+    [GeneratedRegex(@"^(\d{1,2})-([A-Za-z]{3})-(\d{4}) (\d{2}):(\d{2}):(\d{2}) ([+-])(\d{2})(\d{2})$")]
+    private static partial Regex InternalDateRegex();
+
     private async Task<bool> IdleAsync(string tag, CancellationToken ct)
     {
         await c.SendLineAsync("+ Aguardando novidades (IDLE)", ct);
-        var read = c.ReadLineAsync(ct, 8192);
-        while (true)
+        using var idle = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var read = c.ReadLineAsync(ct, IdleLineLimit);
+        var keepAlive = Task.Delay(IdleKeepAlive, idle.Token);
+        try
         {
-            var changed = Volatile.Read(ref _changeSignal).Task;
-            Sync(true);
-            await c.FlushAsync(ct);
-
-            var timeout = Task.Delay(TimeSpan.FromMinutes(25), ct);
-            var done = await Task.WhenAny(read, changed, timeout);
-            if (done == read)
+            while (true)
             {
-                var line = await read;
-                if (line is null)
-                    return false;
-                _log.FromClient(line);
-                if (line.Trim().Equals("DONE", StringComparison.OrdinalIgnoreCase))
-                    Ok(tag, "IDLE encerrado");
-                else
-                    Bad(tag, "Esperava DONE");
-                return true;
+                var changed = Volatile.Read(ref _changeSignal).Task;
+                Sync(true);
+                await c.FlushAsync(ct);
+
+                var done = await Task.WhenAny(read, changed, keepAlive);
+                if (done == read)
+                    break;
+                if (done == keepAlive)
+                {
+                    Untagged("OK Ainda conectado");
+                    keepAlive = Task.Delay(IdleKeepAlive, idle.Token);
+                }
             }
-            if (done == timeout)
-                Untagged("OK Ainda conectado");
         }
+        finally
+        {
+            await idle.CancelAsync();
+        }
+
+        string? line;
+        try
+        {
+            line = await read;
+        }
+        catch (LineTooLongException)
+        {
+            await c.SendLineAsync("* BYE Linha muito longa", ct);
+            return false;
+        }
+        if (line is null)
+            return false;
+        _log.FromClient(line);
+        if (line.Trim().Equals("DONE", StringComparison.OrdinalIgnoreCase))
+            Ok(tag, "IDLE encerrado");
+        else
+            Bad(tag, "Esperava DONE");
+        return true;
     }
 }

@@ -18,12 +18,12 @@
           </div>
           <div class="users" x-show="passwordMode === 'users'">
             <table class="grid">
-              <tr><th>Usuário (normalmente o e-mail)</th><th>Senha</th><th></th></tr>
+              <tr><th>Usuário (normalmente o e-mail)</th><th>Senha</th><th><span class="sr-only">Ações</span></th></tr>
               <template x-for="u in userRows" :key="u.id">
                 <tr>
-                  <td><input x-model="u.username" placeholder="ana@empresa.local" aria-label="Usuário"></td>
+                  <td><input class="user-name" x-model="u.username" placeholder="ana@empresa.local" aria-label="Usuário"></td>
                   <td><input x-model="u.password" placeholder="senha" aria-label="Senha" autocomplete="off"></td>
-                  <td><button type="button" class="ghost danger" @click="removeUser(u.id)">Remover</button></td>
+                  <td><button type="button" class="ghost danger" :aria-label="u.username.trim() ? 'Remover o usuário ' + u.username.trim() : 'Remover esta linha'" @click="removeUser(u.id)">Remover</button></td>
                 </tr>
               </template>
               <tr x-show="userRows.length === 0"><td colspan="3" class="muted">Nenhum usuário cadastrado.</td></tr>
@@ -90,6 +90,10 @@
           <label class="check"><input type="checkbox" x-model="model.openBrowserOnStart"> Abrir o navegador ao iniciar</label>
         </div>
         <div class="actions sticky">
+          <div class="notice small" x-show="externalChange" role="status">
+            <span>As configurações foram alteradas em outro lugar (por exemplo, por um agente de IA) enquanto você editava. Se clicar em <b>Salvar</b>, as suas mudanças substituem as de lá.</span>
+            <button type="button" class="ghost" @click="discard()">Descartar as minhas mudanças</button>
+          </div>
           <span class="muted small" x-text="message"></span>
           <span class="spacer"></span>
           <button type="submit">Salvar</button>
@@ -100,17 +104,35 @@
     <template x-if="certificate">
       <div class="card" id="certificado">
         <h3>Certificado TLS</h3>
-        <p class="muted small">STARTTLS, SMTPS, POP3S, IMAPS e o HTTPS usam um certificado autoassinado para <code>localhost</code>. Configure o cliente para aceitar certificados inválidos, ou marque este certificado como confiável no seu usuário do Windows (o Windows vai pedir confirmação). A MSAL e outras bibliotecas da Microsoft exigem HTTPS confiável.</p>
+        <p class="muted small">As conexões com criptografia (STARTTLS, SMTPS, POP3S, IMAPS e HTTPS) usam um certificado criado por este programa para <code>localhost</code>. Para os aplicativos aceitarem sem aviso, configure-os para aceitar certificado inválido ou marque este certificado como confiável. A MSAL e outras bibliotecas da Microsoft exigem um certificado confiável.</p>
         <p>
           Situação:
-          <span class="tag ok" x-show="certificate.trusted">confiável neste usuário</span>
-          <span class="tag warn" x-show="!certificate.trusted">não confiável</span>
+          <span class="tag" x-show="certificate.trustScope === 'none'">ainda não é confiável</span>
+          <span class="tag ok" x-show="certificate.trustScope === 'user'">confiável para o seu usuário</span>
+          <span class="tag ok" x-show="certificate.trustScope === 'computer'">confiável para todo o computador</span>
           · válido até <span x-text="fmtDate(certificate.notAfter)"></span>
           · <span class="mono small" x-text="certificate.thumbprint"></span>
         </p>
+        <div class="choices">
+          <div class="option">
+            <b>Só para o meu usuário</b>
+            <p class="muted small">Vale para os programas que você abre, como Chrome, Edge e aplicativos .NET. Não precisa de administrador; o Windows mostra uma confirmação.</p>
+            <div class="actions left">
+              <button x-show="certificate.trustScope === 'none'" :disabled="trustBusy" @click="setTrust(true, 'user')">Confiar só para mim</button>
+              <button class="ghost" x-show="certificate.trustScope === 'user'" :disabled="trustBusy" @click="setTrust(false, 'user')">Remover do meu usuário</button>
+            </div>
+          </div>
+          <div class="option">
+            <b>Para todo o computador</b>
+            <p class="muted small">Vale também para o IIS, serviços do Windows, outros usuários e o Firefox (quando ele usa os certificados do Windows). O Windows pede permissão de administrador.</p>
+            <div class="actions left">
+              <button x-show="certificate.trustScope !== 'computer'" :disabled="trustBusy" @click="setTrust(true, 'computer')">Confiar para todo o computador</button>
+              <button class="ghost" x-show="certificate.trustScope === 'computer'" :disabled="trustBusy" @click="setTrust(false, 'computer')">Remover do computador</button>
+            </div>
+          </div>
+        </div>
+        <p class="muted small" x-show="trustBusy" role="status">Aguardando a confirmação do Windows…</p>
         <div class="actions left">
-          <button class="ghost" x-show="certificate.trusted" @click="setTrust(false)">Remover confiança</button>
-          <button x-show="!certificate.trusted" @click="setTrust(true)">Confiar no certificado</button>
           <a class="button ghost" href="/api/certificate">Baixar .cer</a>
         </div>
       </div>

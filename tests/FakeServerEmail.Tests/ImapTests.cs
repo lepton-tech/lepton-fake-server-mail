@@ -13,7 +13,7 @@ public sealed class ImapTests(ServerFixture fx)
 
     private async Task<ImapClient> ConnectAsync(SecureSocketOptions options = SecureSocketOptions.None, int? port = null)
     {
-        var client = new ImapClient { ServerCertificateValidationCallback = (_, _, _, _) => true };
+        var client = new ImapClient { ServerCertificateValidationCallback = fx.IsServerCertificate };
         await client.ConnectAsync("127.0.0.1", port ?? fx.Imap, options, _ct);
         await client.AuthenticateAsync("leitor@teste.local", "qualquer", _ct);
         return client;
@@ -23,7 +23,7 @@ public sealed class ImapTests(ServerFixture fx)
     public async Task Fetch_de_envelope_estrutura_partes_e_mensagem_completa()
     {
         var subject = "imap-rich-" + Guid.NewGuid();
-        await fx.SendAsync(ServerFixture.Rich(subject));
+        await fx.SendAsync(ServerFixture.Rich(subject), _ct);
 
         using var client = await ConnectAsync();
         var inbox = client.Inbox;
@@ -69,39 +69,29 @@ public sealed class ImapTests(ServerFixture fx)
     [Fact]
     public async Task Sintaxe_crua_literais_secoes_parciais_e_seen()
     {
-        using var tcp = new System.Net.Sockets.TcpClient();
-        await tcp.ConnectAsync("127.0.0.1", fx.Imap, _ct);
-        var stream = tcp.GetStream();
-        var reader = new StreamReader(stream, System.Text.Encoding.UTF8);
+        await using var imap = await RawLineClient.ConnectAsync(fx.Imap, _ct);
 
         async Task<List<string>> CommandAsync(string tag, string command)
         {
-            await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes(command + "\r\n"), _ct);
-            var lines = new List<string>();
-            while (true)
-            {
-                var line = await reader.ReadLineAsync(_ct) ?? throw new IOException("conexão fechada");
-                lines.Add(line);
-                if (line.StartsWith(tag + " ", StringComparison.Ordinal))
-                    return lines;
-            }
+            await imap.SendLineAsync(command);
+            return await imap.ReadImapUntilTaggedAsync(tag);
         }
 
-        Assert.StartsWith("* OK", await reader.ReadLineAsync(_ct));
+        Assert.StartsWith("* OK", await imap.ReadLineAsync(), StringComparison.Ordinal);
         Assert.Contains("a1 OK", (await CommandAsync("a1", "a1 LOGIN \"cru@teste.local\" {3+}\r\nabc"))[^1]);
         Assert.Contains("a2 OK", (await CommandAsync("a2", "a2 SELECT INBOX"))[^1]);
 
         var subject = "cru-imap-" + Guid.NewGuid();
         var message = $"Subject: {subject}\r\nFrom: x@teste.local\r\n\r\nCorpo cru 1234567890\r\n";
         var bytes = System.Text.Encoding.UTF8.GetByteCount(message);
-        await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes($"a3 APPEND INBOX (\\Flagged) {{{bytes}}}\r\n"), _ct);
-        Assert.StartsWith("+", await reader.ReadLineAsync(_ct));
+        await imap.SendLineAsync($"a3 APPEND INBOX (\\Flagged) {{{bytes}}}");
+        Assert.StartsWith("+", await imap.ReadLineAsync(), StringComparison.Ordinal);
         var append = await CommandAsync("a3", message);
         Assert.Contains("[APPENDUID ", append[^1]);
         Assert.Contains(append, l => l.EndsWith(" EXISTS", StringComparison.Ordinal));
 
         var search = await CommandAsync("a4", $"a4 UID SEARCH CHARSET UTF-8 SUBJECT \"{subject}\" FLAGGED");
-        var uid = search.Single(l => l.StartsWith("* SEARCH ")).Split(' ')[2];
+        var uid = search.Single(l => l.StartsWith("* SEARCH ", StringComparison.Ordinal)).Split(' ')[2];
 
         var headerFields = await CommandAsync("a5", $"a5 UID FETCH {uid} (BODY.PEEK[HEADER.FIELDS (SUBJECT)] BODY.PEEK[TEXT]<0.9>)");
         Assert.Contains(headerFields, l => l.Contains("BODY[HEADER.FIELDS (SUBJECT)]"));
@@ -115,7 +105,7 @@ public sealed class ImapTests(ServerFixture fx)
         Assert.Contains("a7 BAD", (await CommandAsync("a7", "a7 FETCH 1 (XPTO)"))[^1]);
         Assert.Contains("a8 BAD", (await CommandAsync("a8", "a8 COMANDOINVALIDO"))[^1]);
         var status = await CommandAsync("a9", "a9 STATUS INBOX (MESSAGES UNSEEN UIDNEXT UIDVALIDITY)");
-        Assert.Contains(status, l => l.StartsWith("* STATUS \"INBOX\" (MESSAGES "));
+        Assert.Contains(status, l => l.StartsWith("* STATUS \"INBOX\" (MESSAGES ", StringComparison.Ordinal));
         Assert.Contains("b1 OK", (await CommandAsync("b1", "b1 LOGOUT"))[^1]);
     }
 
@@ -123,9 +113,9 @@ public sealed class ImapTests(ServerFixture fx)
     public async Task Flags_busca_mover_copiar_apagar_e_append()
     {
         var tag = "imap-ops-" + Guid.NewGuid();
-        await fx.SendAsync(ServerFixture.Simple(tag + " A"));
-        await fx.SendAsync(ServerFixture.Simple(tag + " B", text: "palavra-unica-xyz"));
-        await fx.SendAsync(ServerFixture.Simple(tag + " C"));
+        await fx.SendAsync(ServerFixture.Simple(tag + " A"), _ct);
+        await fx.SendAsync(ServerFixture.Simple(tag + " B", text: "palavra-unica-xyz"), _ct);
+        await fx.SendAsync(ServerFixture.Simple(tag + " C"), _ct);
 
         using var client = await ConnectAsync(SecureSocketOptions.StartTls);
         Assert.True(client.IsSecure);
@@ -174,7 +164,7 @@ public sealed class ImapTests(ServerFixture fx)
         Assert.Contains(folders, f => f.Name == "Renomeada " + tag[..12]);
         await created.DeleteAsync(_ct);
         folders = await personal.GetSubfoldersAsync(false, _ct);
-        Assert.DoesNotContain(folders, f => f.Name.EndsWith(tag[..12]));
+        Assert.DoesNotContain(folders, f => f.Name.EndsWith(tag[..12], StringComparison.Ordinal));
 
         await client.DisconnectAsync(true, _ct);
     }
@@ -195,8 +185,9 @@ public sealed class ImapTests(ServerFixture fx)
 
         using var done = new CancellationTokenSource();
         var idle = client.IdleAsync(done.Token, _ct);
-        await Task.Delay(300, _ct);
-        await fx.SendAsync(ServerFixture.Simple("imap-idle-" + Guid.NewGuid()));
+        await ServerFixture.WaitUntilAsync(() => fx.Server.Context.Log.List().Any(s => s.EndedAt is null
+            && s.Lines.Any(l => l.Direction == 'C' && l.Text.EndsWith(" IDLE", StringComparison.Ordinal))), "o cliente entrou em IDLE", _ct);
+        await fx.SendAsync(ServerFixture.Simple("imap-idle-" + Guid.NewGuid()), _ct);
         var finished = await Task.WhenAny(arrived.Task, Task.Delay(TimeSpan.FromSeconds(10), _ct));
         done.Cancel();
         await idle;
@@ -223,31 +214,23 @@ public sealed class ImapTests(ServerFixture fx)
     [Fact]
     public async Task Sem_STARTTLS_e_so_PLAIN_quando_configurado()
     {
-        var settings = fx.Server.Context.Settings;
-        var original = settings.Current.Clone();
-        try
+        using var settings = fx.OverrideSettings(s =>
         {
-            var changed = original.Clone();
-            changed.OfferStartTls = false;
-            changed.AuthMechanisms = ["PLAIN"];
-            settings.Update(changed);
+            s.OfferStartTls = false;
+            s.AuthMechanisms = ["PLAIN"];
+        });
 
-            using (var strict = new ImapClient())
-                await Assert.ThrowsAsync<NotSupportedException>(() => strict.ConnectAsync("127.0.0.1", fx.Imap, SecureSocketOptions.StartTls, _ct));
+        using (var strict = new ImapClient())
+            await Assert.ThrowsAsync<NotSupportedException>(() => strict.ConnectAsync("127.0.0.1", fx.Imap, SecureSocketOptions.StartTls, _ct));
 
-            var user = "imap-plain-" + Guid.NewGuid().ToString("N") + "@teste.local";
-            using var client = new ImapClient();
-            await client.ConnectAsync("127.0.0.1", fx.Imap, SecureSocketOptions.StartTlsWhenAvailable, _ct);
-            Assert.False(client.IsSecure);
-            Assert.False(client.Capabilities.HasFlag(ImapCapabilities.StartTLS));
-            Assert.Equal("PLAIN", Assert.Single(client.AuthenticationMechanisms));
-            await client.AuthenticateAsync(user, "x", _ct);
-            await client.DisconnectAsync(true, _ct);
-            Assert.Equal("PLAIN", fx.Server.Context.Log.List().Single(s => s.User == user).AuthMechanism);
-        }
-        finally
-        {
-            settings.Update(original);
-        }
+        var user = "imap-plain-" + Guid.NewGuid().ToString("N") + "@teste.local";
+        using var client = new ImapClient();
+        await client.ConnectAsync("127.0.0.1", fx.Imap, SecureSocketOptions.StartTlsWhenAvailable, _ct);
+        Assert.False(client.IsSecure);
+        Assert.False(client.Capabilities.HasFlag(ImapCapabilities.StartTLS));
+        Assert.Equal("PLAIN", Assert.Single(client.AuthenticationMechanisms));
+        await client.AuthenticateAsync(user, "x", _ct);
+        await client.DisconnectAsync(true, _ct);
+        Assert.Equal("PLAIN", fx.Server.Context.Log.List().Single(s => s.User == user).AuthMechanism);
     }
 }

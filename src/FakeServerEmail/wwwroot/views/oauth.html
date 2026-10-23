@@ -9,7 +9,7 @@
           <template x-for="row in endpoints" :key="row[0]">
             <tr>
               <th x-text="row[0]"></th>
-              <td><div class="copy-row"><code x-text="row[1]"></code><button class="ghost" @click="$store.app.copy(row[1])">Copiar</button></div></td>
+              <td><div class="copy-row"><code x-text="row[1]"></code><button class="ghost" :aria-label="'Copiar endereço ' + row[0]" @click="$store.app.copy(row[1])">Copiar</button></div></td>
             </tr>
           </template>
         </table>
@@ -24,9 +24,9 @@
           <div class="actions"><button type="submit">Gerar token</button></div>
         </form>
         <div x-show="generated">
-          <label class="small muted">Access token</label>
-          <textarea class="mono" rows="5" readonly :value="generated" aria-label="Access token gerado"></textarea>
-          <div class="actions"><button class="ghost" @click="$store.app.copy(generated)">Copiar</button></div>
+          <label class="small muted" for="oauth-generated">Access token</label>
+          <textarea id="oauth-generated" class="mono" rows="5" readonly :value="generated"></textarea>
+          <div class="actions"><button class="ghost" aria-label="Copiar o access token gerado" @click="$store.app.copy(generated)">Copiar</button></div>
         </div>
       </div>
     </div>
@@ -37,7 +37,7 @@
       </div>
       <div class="table-wrap">
         <table class="grid">
-          <tr><th>Emitido</th><th>Fluxo</th><th>Cliente</th><th>Usuário</th><th>Escopo</th><th>Situação</th><th>Usos</th><th></th></tr>
+          <tr><th>Emitido</th><th>Fluxo</th><th>Cliente</th><th>Usuário</th><th>Escopo</th><th>Situação</th><th>Usos</th><th><span class="sr-only">Ações</span></th></tr>
           <tr x-show="tokens.length === 0"><td colspan="8" class="muted">Nenhum token emitido ainda.</td></tr>
           <template x-for="t in tokens" :key="t.jti">
             <tr>
@@ -50,8 +50,8 @@
               <td x-text="t.timesUsed"></td>
               <td>
                 <div class="actions">
-                  <button class="ghost" @click="$store.app.copy(t.accessToken)">Copiar</button>
-                  <button class="ghost danger" x-show="!t.revoked" @click="revoke(t)">Revogar</button>
+                  <button class="ghost" :aria-label="'Copiar o token emitido em ' + fmtDate(t.issuedAt)" @click="$store.app.copy(t.accessToken)">Copiar</button>
+                  <button class="ghost danger" x-show="!t.revoked" :aria-label="'Revogar o token emitido em ' + fmtDate(t.issuedAt)" @click="revoke(t)">Revogar</button>
                 </div>
               </td>
             </tr>

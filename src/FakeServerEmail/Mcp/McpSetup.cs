@@ -16,7 +16,7 @@ public static class McpSetup
 
     public static IMcpServerBuilder AddFakeMailMcp(this IServiceCollection services, MailApiClient api)
     {
-        services.AddSingleton(api);
+        services.AddSingleton(_ => api);
         return services
             .AddMcpServer(options =>
             {

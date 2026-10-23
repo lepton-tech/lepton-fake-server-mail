@@ -1,7 +1,7 @@
 <div x-data="sendDialog">
-  <dialog id="send-dialog" x-ref="dialog">
+  <dialog id="send-dialog" x-ref="dialog" aria-labelledby="send-dialog-title">
     <form class="form" @submit.prevent="send()">
-      <h3>Enviar e-mail de teste</h3>
+      <h3 id="send-dialog-title">Enviar e-mail de teste</h3>
       <label>De <input x-model="form.from"></label>
       <label>Para <input x-model="form.to"></label>
       <label>Assunto <input x-model="form.subject"></label>

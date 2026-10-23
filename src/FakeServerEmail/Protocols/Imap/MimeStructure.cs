@@ -3,9 +3,9 @@ using MimeKit;
 
 namespace FakeServerEmail.Protocols.Imap;
 
-public sealed record RawHeader(string Name, string Value, int Start, int End);
+internal sealed record RawHeader(string Name, string Value, int Start, int End);
 
-public sealed class MimeNode
+internal sealed class MimeNode
 {
     public int Start { get; init; }
     public int BodyStart { get; init; }
@@ -36,8 +36,10 @@ public sealed class MimeNode
     public string? Header(string name) => Headers.FirstOrDefault(h => h.Name.Equals(name, StringComparison.OrdinalIgnoreCase))?.Value;
 }
 
-public static class MimeStructure
+internal static class MimeStructure
 {
+    private const int MaxDepth = 50;
+
     public static MimeNode Parse(byte[] raw) => ParseEntity(raw, 0, raw.Length, false, 0);
 
     private static MimeNode ParseEntity(byte[] raw, int start, int end, bool digestChild, int depth)
@@ -129,7 +131,7 @@ public static class MimeStructure
 
         node.BodyLines = CountLines(raw, node.BodyStart, end);
 
-        if (depth > 50)
+        if (depth > MaxDepth)
             return node;
 
         if (node.IsMultipart)

@@ -1,7 +1,9 @@
+using System.Buffers.Text;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using FakeServerEmail.Core;
 
 namespace FakeServerEmail.OAuth;
 
@@ -31,8 +33,17 @@ public sealed class RefreshGrant
 
 public sealed record TokenValidation(bool Valid, string? User, string? ClientId, string? Scope, string? Error, DateTimeOffset? ExpiresAt);
 
-public sealed class TokenService
+public sealed class TokenService : IDisposable
 {
+    public const string FakeTenantId = "00000000-0000-0000-0000-00000000fa4e";
+    private const int MaxKeptTokens = 500;
+    private const int MaxRefreshTokens = 500;
+    private const int RsaKeySize = 2048;
+    private const int KeyIdLength = 16;
+    private const int RefreshTokenBytes = 32;
+    private static readonly TimeSpan SaveDelay = TimeSpan.FromMilliseconds(400);
+    private static readonly string[] AppRoles = ["SMTP.SendAsApp", "IMAP.AccessAsApp", "POP.AccessAsApp", "Mail.Send"];
+
     private sealed class PersistedState
     {
         public List<IssuedToken> Tokens { get; set; } = [];
@@ -42,17 +53,20 @@ public sealed class TokenService
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     private readonly Lock _lock = new();
+    private readonly Lock _saveLock = new();
     private readonly RSA _rsa;
     private readonly string _statePath;
     private readonly List<IssuedToken> _tokens = [];
     private readonly Dictionary<string, RefreshGrant> _refreshTokens = [];
+    private readonly Timer _saveTimer;
+    private bool _dirty;
 
     public TokenService(string dataDirectory)
     {
-        _statePath = Path.Combine(dataDirectory, "oauth-tokens.json");
-        _rsa = LoadOrCreateKey(Path.Combine(dataDirectory, "oauth-chave-privada.pem"));
-        var parameters = _rsa.ExportParameters(false);
-        KeyId = Base64Url(SHA256.HashData(parameters.Modulus!))[..16];
+        _statePath = Path.Combine(dataDirectory, DataFiles.OAuthTokens);
+        _rsa = LoadOrCreateKey(Path.Combine(dataDirectory, DataFiles.OAuthKey));
+        KeyId = Base64Url.EncodeToString(SHA256.HashData(_rsa.ExportParameters(false).Modulus!))[..KeyIdLength];
+        _saveTimer = new Timer(_ => Save(), null, Timeout.Infinite, Timeout.Infinite);
         LoadState();
     }
 
@@ -77,8 +91,8 @@ public sealed class TokenService
                 ["use"] = "sig",
                 ["alg"] = "RS256",
                 ["kid"] = KeyId,
-                ["n"] = Base64Url(p.Modulus!),
-                ["e"] = Base64Url(p.Exponent!),
+                ["n"] = Base64Url.EncodeToString(p.Modulus!),
+                ["e"] = Base64Url.EncodeToString(p.Exponent!),
             }),
         };
     }
@@ -87,11 +101,10 @@ public sealed class TokenService
     {
         var now = DateTimeOffset.UtcNow;
         var jti = Guid.NewGuid().ToString("N");
-        var audience = AudienceFromScope(scope);
         var claims = new JsonObject
         {
             ["iss"] = issuer,
-            ["aud"] = audience,
+            ["aud"] = AudienceFromScope(scope),
             ["sub"] = user ?? clientId,
             ["iat"] = now.ToUnixTimeSeconds(),
             ["nbf"] = now.ToUnixTimeSeconds(),
@@ -114,7 +127,7 @@ public sealed class TokenService
         }
         else
         {
-            claims["roles"] = new JsonArray("SMTP.SendAsApp", "IMAP.AccessAsApp", "POP.AccessAsApp", "Mail.Send");
+            claims["roles"] = new JsonArray([.. AppRoles.Select(r => (JsonNode)r)]);
         }
 
         var token = new IssuedToken
@@ -133,10 +146,10 @@ public sealed class TokenService
         lock (_lock)
         {
             _tokens.Add(token);
-            if (_tokens.Count > 500)
-                _tokens.RemoveRange(0, _tokens.Count - 500);
+            ForgetExpiredTokens(now);
+            MarkDirty();
         }
-        SaveState();
+        Changed?.Invoke();
         return token;
     }
 
@@ -156,7 +169,7 @@ public sealed class TokenService
             ["preferred_username"] = user,
             ["name"] = DisplayName(user),
             ["oid"] = DeterministicGuid(user),
-            ["tid"] = "00000000-0000-0000-0000-00000000fa4e",
+            ["tid"] = FakeTenantId,
         };
         if (!string.IsNullOrEmpty(nonce))
             claims["nonce"] = nonce;
@@ -165,10 +178,15 @@ public sealed class TokenService
 
     public string CreateRefreshToken(string clientId, string? user, string scope)
     {
-        var value = "frt_" + Base64Url(RandomNumberGenerator.GetBytes(32));
+        var value = "frt_" + Base64Url.EncodeToString(RandomNumberGenerator.GetBytes(RefreshTokenBytes));
         lock (_lock)
+        {
             _refreshTokens[value] = new RefreshGrant { ClientId = clientId, User = user, Scope = scope, CreatedAt = DateTimeOffset.UtcNow };
-        SaveState();
+            if (_refreshTokens.Count > MaxRefreshTokens)
+                foreach (var oldest in _refreshTokens.OrderBy(r => r.Value.CreatedAt).Take(_refreshTokens.Count - MaxRefreshTokens).Select(r => r.Key).ToList())
+                    _refreshTokens.Remove(oldest);
+            MarkDirty();
+        }
         return value;
     }
 
@@ -188,10 +206,10 @@ public sealed class TokenService
         JsonNode? payload;
         try
         {
-            signature = FromBase64Url(parts[2]);
-            payload = JsonNode.Parse(FromBase64Url(parts[1]));
+            signature = Base64Url.DecodeFromChars(parts[2]);
+            payload = JsonNode.Parse(Base64Url.DecodeFromChars(parts[1]));
         }
-        catch
+        catch (Exception ex) when (ex is FormatException or JsonException)
         {
             return Fail("Token malformado");
         }
@@ -206,24 +224,27 @@ public sealed class TokenService
         var clientId = payload?["client_id"]?.GetValue<string>();
         var scope = payload?["scope"]?.GetValue<string>();
 
+        if (jti is null)
+            return new TokenValidation(false, user, clientId, scope, "Este é um id_token, que só identifica o usuário. Para entrar no e-mail, use o access_token.", exp);
+
         IssuedToken? issued;
         lock (_lock)
             issued = _tokens.FirstOrDefault(t => t.Jti == jti);
 
-        if (issued?.Revoked == true)
+        if (issued is null)
+            return new TokenValidation(false, user, clientId, scope, "Token desconhecido: ele não está mais na lista de tokens deste servidor (a lista foi limpa?)", exp);
+        if (issued.Revoked)
             return new TokenValidation(false, user, clientId, scope, "Token revogado", exp);
         if (exp <= DateTimeOffset.UtcNow)
             return new TokenValidation(false, user, clientId, scope, $"Token expirado em {exp.ToLocalTime():dd/MM/yyyy HH:mm:ss}", exp);
 
-        if (issued is not null)
+        lock (_lock)
         {
-            lock (_lock)
-            {
-                issued.TimesUsed++;
-                issued.LastUsedAt = DateTimeOffset.UtcNow;
-            }
-            SaveState();
+            issued.TimesUsed++;
+            issued.LastUsedAt = DateTimeOffset.UtcNow;
+            MarkDirty();
         }
+        Changed?.Invoke();
         return new TokenValidation(true, user, clientId, scope, null, exp);
 
         static TokenValidation Fail(string error) => new(false, null, null, null, error, null);
@@ -237,8 +258,9 @@ public sealed class TokenService
             if (token is null)
                 return false;
             token.Revoked = true;
+            MarkDirty();
         }
-        SaveState();
+        Changed?.Invoke();
         return true;
     }
 
@@ -248,8 +270,20 @@ public sealed class TokenService
         {
             _tokens.Clear();
             _refreshTokens.Clear();
+            MarkDirty();
         }
-        SaveState();
+        Changed?.Invoke();
+    }
+
+    public void Dispose()
+    {
+        using (var callbacksDone = new ManualResetEvent(false))
+        {
+            if (_saveTimer.Dispose(callbacksDone))
+                callbacksDone.WaitOne();
+        }
+        Save();
+        _rsa.Dispose();
     }
 
     public static string AudienceFromScope(string scope)
@@ -271,53 +305,63 @@ public sealed class TokenService
         return string.Join(' ', local.Split(' ', StringSplitOptions.RemoveEmptyEntries).Select(w => char.ToUpperInvariant(w[0]) + w[1..]));
     }
 
-    public static string DeterministicGuid(string value) =>
-        new Guid(MD5.HashData(Encoding.UTF8.GetBytes(value.ToLowerInvariant()))).ToString();
-
-    public static string Base64Url(byte[] data) => Convert.ToBase64String(data).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-
-    public static byte[] FromBase64Url(string value)
+    public static string DeterministicGuid(string value)
     {
-        var s = value.Replace('-', '+').Replace('_', '/');
-        return Convert.FromBase64String(s.PadRight(s.Length + (4 - s.Length % 4) % 4, '='));
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(value.ToLowerInvariant()));
+        hash[6] = (byte)((hash[6] & 0x0F) | 0x80);
+        hash[8] = (byte)((hash[8] & 0x3F) | 0x80);
+        return new Guid(hash.AsSpan(0, 16), bigEndian: true).ToString();
+    }
+
+    private void ForgetExpiredTokens(DateTimeOffset now)
+    {
+        if (_tokens.Count <= MaxKeptTokens)
+            return;
+        var expired = _tokens.Where(t => t.ExpiresAt <= now).OrderBy(t => t.ExpiresAt).Take(_tokens.Count - MaxKeptTokens).ToHashSet();
+        _tokens.RemoveAll(expired.Contains);
     }
 
     private string Sign(JsonObject claims)
     {
         var header = new JsonObject { ["alg"] = "RS256", ["kid"] = KeyId, ["typ"] = "JWT" };
-        var unsigned = Base64Url(Encoding.UTF8.GetBytes(header.ToJsonString())) + "." + Base64Url(Encoding.UTF8.GetBytes(claims.ToJsonString()));
+        var unsigned = Base64Url.EncodeToString(Encoding.UTF8.GetBytes(header.ToJsonString())) + "." + Base64Url.EncodeToString(Encoding.UTF8.GetBytes(claims.ToJsonString()));
         var signature = _rsa.SignData(Encoding.ASCII.GetBytes(unsigned), HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
-        return unsigned + "." + Base64Url(signature);
+        return unsigned + "." + Base64Url.EncodeToString(signature);
     }
 
     private static RSA LoadOrCreateKey(string path)
     {
-        var rsa = RSA.Create();
-        try
+        if (File.Exists(path))
         {
-            if (File.Exists(path))
+            var existing = RSA.Create();
+            try
             {
-                rsa.ImportFromPem(File.ReadAllText(path));
-                return rsa;
+                existing.ImportFromPem(File.ReadAllText(path));
+                return existing;
+            }
+            catch (Exception ex) when (ex is IOException or ArgumentException or CryptographicException)
+            {
+                existing.Dispose();
             }
         }
-        catch
-        {
-            rsa.Dispose();
-            rsa = RSA.Create();
-        }
 
-        rsa.KeySize = 2048;
-        try { File.WriteAllText(path, rsa.ExportRSAPrivateKeyPem()); } catch { }
+        var rsa = RSA.Create(RsaKeySize);
+        try
+        {
+            AtomicFile.WriteAllText(path, rsa.ExportRSAPrivateKeyPem());
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
         return rsa;
     }
 
     private void LoadState()
     {
+        if (!File.Exists(_statePath))
+            return;
         try
         {
-            if (!File.Exists(_statePath))
-                return;
             var state = JsonSerializer.Deserialize<PersistedState>(File.ReadAllText(_statePath), JsonOptions);
             if (state is null)
                 return;
@@ -325,23 +369,48 @@ public sealed class TokenService
             foreach (var (k, v) in state.RefreshTokens ?? [])
                 _refreshTokens[k] = v;
         }
-        catch
+        catch (JsonException)
+        {
+            try
+            {
+                File.Copy(_statePath, _statePath + DataFiles.InvalidSuffix, true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
         }
     }
 
-    private void SaveState()
+    private void MarkDirty()
     {
-        string json;
-        lock (_lock)
-            json = JsonSerializer.Serialize(new PersistedState { Tokens = _tokens, RefreshTokens = _refreshTokens }, JsonOptions);
-        try
+        _dirty = true;
+        _saveTimer.Change(SaveDelay, Timeout.InfiniteTimeSpan);
+    }
+
+    private void Save()
+    {
+        lock (_saveLock)
         {
-            File.WriteAllText(_statePath, json);
+            string json;
+            lock (_lock)
+            {
+                if (!_dirty)
+                    return;
+                _dirty = false;
+                json = JsonSerializer.Serialize(new PersistedState { Tokens = _tokens, RefreshTokens = _refreshTokens }, JsonOptions);
+            }
+            try
+            {
+                AtomicFile.WriteAllText(_statePath, json);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                lock (_lock)
+                    MarkDirty();
+            }
         }
-        catch
-        {
-        }
-        Changed?.Invoke();
     }
 }

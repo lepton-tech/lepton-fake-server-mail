@@ -6,7 +6,7 @@ using ModelContextProtocol.Client;
 
 namespace FakeServerEmail.Tests;
 
-public sealed class McpStdioTests : IDisposable
+public sealed class McpStdioTests : IAsyncDisposable
 {
     private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
     private readonly string _data = Path.Combine(Path.GetTempPath(), "fse-stdio-" + Guid.NewGuid().ToString("N"));
@@ -51,24 +51,22 @@ public sealed class McpStdioTests : IDisposable
         await smtp.DisconnectAsync(true, _ct);
     }
 
-    private async Task WaitUntilAsync(Func<bool> condition, string what)
-    {
-        for (var i = 0; i < 100 && !condition(); i++)
-            await Task.Delay(100, _ct);
-        Assert.True(condition(), what);
-    }
+    private static readonly TimeSpan ProcessTimeout = TimeSpan.FromSeconds(10);
+
+    private Task WaitUntilAsync(Func<bool> condition, string what) => ServerFixture.WaitUntilAsync(condition, what, _ct, ProcessTimeout);
+
+    private int RunningPid() => JsonElement.Parse(File.ReadAllText(Path.Combine(_data, "em-execucao.json"))).GetProperty("pid").GetInt32();
 
     [Fact]
     public async Task Stdio_sem_instancia_aberta_sobe_servidor_proprio_e_sobrevive_a_encerramento_forcado()
     {
-        var running = Path.Combine(_data, "em-execucao.json");
         var subject = "stdio-proprio-" + Guid.NewGuid();
         int pid;
         await using (var client = await ConnectStdioAsync())
         {
             var info = await client.CallJsonAsync("server_info", null, _ct);
             Assert.Equal($"http://localhost:{_http}", info.GetProperty("webInterface").GetString());
-            pid = JsonDocument.Parse(File.ReadAllText(running)).RootElement.GetProperty("pid").GetInt32();
+            pid = RunningPid();
             await SendAsync(subject);
             var list = await client.CallJsonAsync("list_messages", new() { ["subject"] = subject }, _ct);
             Assert.Equal(1, list.GetProperty("total").GetInt32());
@@ -80,7 +78,7 @@ public sealed class McpStdioTests : IDisposable
         {
             var list = await again.CallJsonAsync("list_messages", new() { ["subject"] = subject }, _ct);
             Assert.Equal(1, list.GetProperty("total").GetInt32());
-            var newPid = JsonDocument.Parse(File.ReadAllText(running)).RootElement.GetProperty("pid").GetInt32();
+            var newPid = RunningPid();
             Assert.NotEqual(pid, newPid);
         }
     }
@@ -99,11 +97,11 @@ public sealed class McpStdioTests : IDisposable
         await process.StandardInput.WriteLineAsync("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"teste","version":"1"}}}""");
         await process.StandardInput.FlushAsync(_ct);
         var initialize = await process.StandardOutput.ReadLineAsync(_ct);
-        Assert.Contains("fake-server-email", initialize);
+        Assert.Contains("fake-server-email", initialize, StringComparison.Ordinal);
         Assert.True(File.Exists(Path.Combine(_data, "em-execucao.json")));
 
         process.StandardInput.Close();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var timeout = new CancellationTokenSource(ProcessTimeout);
         await process.WaitForExitAsync(timeout.Token);
         Assert.Equal(0, process.ExitCode);
         Assert.False(File.Exists(Path.Combine(_data, "em-execucao.json")));
@@ -113,7 +111,8 @@ public sealed class McpStdioTests : IDisposable
     {
         try
         {
-            return Process.GetProcessById(pid).HasExited;
+            using var process = Process.GetProcessById(pid);
+            return process.HasExited;
         }
         catch (ArgumentException)
         {
@@ -150,30 +149,26 @@ public sealed class McpStdioTests : IDisposable
         Assert.Equal(subject2, after.GetProperty("subject").GetString());
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
-        foreach (var p in _processes)
+        foreach (var process in _processes)
         {
             try
             {
-                if (!p.HasExited)
-                    p.Kill();
+                if (!process.HasExited)
+                    process.Kill(true);
+                await process.WaitForExitAsync(CancellationToken.None).WaitAsync(ProcessTimeout, CancellationToken.None);
             }
-            catch
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or TimeoutException)
             {
             }
+            process.Dispose();
         }
-        for (var i = 0; i < 20; i++)
+        for (var attempt = 0; attempt < 20 && Directory.Exists(_data); attempt++)
         {
-            try
-            {
-                Directory.Delete(_data, true);
-                return;
-            }
-            catch
-            {
-                Thread.Sleep(150);
-            }
+            ServerFixture.DeleteDirectory(_data);
+            if (Directory.Exists(_data))
+                await Task.Delay(150, CancellationToken.None);
         }
     }
 }

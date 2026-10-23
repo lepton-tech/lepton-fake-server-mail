@@ -1,43 +1,55 @@
 using FakeServerEmail.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using ModelContextProtocol;
 
 namespace FakeServerEmail.Mcp;
 
 public static class McpStdioHost
 {
+    private const int ResolveAttempts = 60;
+    private static readonly TimeSpan ResolveRetryDelay = TimeSpan.FromMilliseconds(250);
+
     public static async Task<int> RunAsync(string dataDirectory)
     {
         FakeMailServer? owned = null;
         Mutex? mutex = null;
-        var gate = new SemaphoreSlim(1, 1);
+        using var gate = new SemaphoreSlim(1, 1);
         using var stop = new CancellationTokenSource();
 
-        async Task<string?> ResolveAsync()
+        async Task<string?> ResolveAsync(CancellationToken ct)
         {
-            await gate.WaitAsync();
+            await gate.WaitAsync(ct);
             try
             {
                 if (owned is not null)
                     return owned.WebUrl;
 
-                for (var attempt = 0; attempt < 60; attempt++)
+                for (var attempt = 0; attempt < ResolveAttempts; attempt++)
                 {
                     var url = SingleInstance.ReadUrl(dataDirectory);
-                    if (url is not null && await SingleInstance.IsAliveAsync(url))
+                    if (url is not null && await SingleInstance.IsAliveAsync(url, ct))
                         return url;
 
-                    var candidate = new Mutex(true, SingleInstance.MutexName(dataDirectory), out var created);
+                    var candidate = new Mutex(false, SingleInstance.MutexName(dataDirectory), out var created);
                     if (created)
                     {
+                        try
+                        {
+                            owned = await FakeMailServer.StartAsync(dataDirectory);
+                        }
+                        catch (Exception ex)
+                        {
+                            candidate.Dispose();
+                            throw new McpException("Não foi possível iniciar o Fake Server Email: " + ex.Message, ex);
+                        }
                         mutex = candidate;
-                        owned = await FakeMailServer.StartAsync(dataDirectory);
                         owned.ShutdownToken.Register(stop.Cancel);
                         SingleInstance.WriteUrl(dataDirectory, owned.WebUrl);
                         return owned.WebUrl;
                     }
                     candidate.Dispose();
-                    await Task.Delay(250);
+                    await Task.Delay(ResolveRetryDelay, ct);
                 }
                 return null;
             }
@@ -49,7 +61,7 @@ public static class McpStdioHost
 
         try
         {
-            var url = await ResolveAsync();
+            var url = await ResolveAsync(stop.Token);
             if (url is null)
             {
                 await Console.Error.WriteLineAsync("Fake Server Email: não foi possível iniciar nem encontrar um servidor em execução.");

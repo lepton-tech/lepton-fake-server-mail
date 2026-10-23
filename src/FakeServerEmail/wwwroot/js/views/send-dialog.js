@@ -27,14 +27,10 @@ export default () => ({
       ? `<div style="font-family:Segoe UI,Arial,sans-serif"><h2 style="color:#2f6fde">${escapeHtml(f.subject)}</h2><p>${escapeHtml(f.text).replace(/\n/g, "<br>")}</p><p style="color:#888;font-size:12px">Enviado pelo Fake Server Email</p></div>`
       : null;
     this.sending = true;
-    try {
+    await this.$store.app.run(async () => {
       await api("/api/send-test", { method: "POST", json: { from: f.from, to: f.to, subject: f.subject, text: f.text, html, attachSample: f.attachSample } });
       this.close();
-      this.$store.app.notify("Mensagem enviada pelo SMTP local");
-    } catch (err) {
-      this.$store.app.notify(err.message, true);
-    } finally {
-      this.sending = false;
-    }
+    }, "Mensagem enviada pelo SMTP local");
+    this.sending = false;
   },
 });

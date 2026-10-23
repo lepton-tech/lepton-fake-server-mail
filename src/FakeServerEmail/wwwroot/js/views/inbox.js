@@ -1,7 +1,7 @@
-import { api, encode } from "../lib/api.js";
+import { api, withFolder } from "../lib/api.js";
 import { debounce, displayAddress, fmtDate, fmtShort, fmtSize, isSeen, plural } from "../lib/format.js";
 
-const TABS = [
+const DETAIL_TABS = [
   { id: "html", label: "HTML" },
   { id: "text", label: "Texto" },
   { id: "headers", label: "Cabeçalhos" },
@@ -10,8 +10,11 @@ const TABS = [
   { id: "delivery", label: "Entrega" },
 ];
 
+const STEPS = new Map([["j", 1], ["k", -1], ["ArrowDown", 1], ["ArrowUp", -1]]);
+
 export default () => ({
-  tabs: TABS,
+  messagesSeq: 0,
+  tabs: DETAIL_TABS,
   folders: [],
   folder: "INBOX",
   messages: [],
@@ -43,7 +46,7 @@ export default () => ({
   get filtered() {
     const q = this.search.trim().toLowerCase();
     if (!q) return this.messages;
-    return this.messages.filter((m) => [m.subject, m.from, m.to, m.cc, m.envelopeFrom, ...(m.envelopeTo || [])].join(" ").toLowerCase().includes(q));
+    return this.messages.filter((m) => [m.subject, m.from, m.to, m.cc, m.envelopeFrom, ...(m.envelopeTo ?? [])].join(" ").toLowerCase().includes(q));
   },
 
   get smtpAddress() {
@@ -51,7 +54,12 @@ export default () => ({
   },
 
   async reload() {
-    await Promise.all([this.loadFolders(), this.loadMessages()]);
+    try {
+      await Promise.all([this.loadFolders(), this.loadMessages()]);
+    } catch (err) {
+      this.$store.app.notify(err.message, true);
+      return;
+    }
     if (this.detail) {
       const fresh = this.messages.find((m) => m.id === this.selectedId);
       if (fresh) this.detail.summary = fresh;
@@ -59,12 +67,11 @@ export default () => ({
   },
 
   async loadFolders() {
-    try {
-      this.folders = await api("/api/folders");
-    } catch {
-      return;
+    this.folders = await api("/api/folders");
+    if (this.folder !== "*" && !this.folders.some((f) => f.name === this.folder)) {
+      this.folder = "INBOX";
+      await this.loadMessages();
     }
-    if (this.folder !== "*" && !this.folders.some((f) => f.name === this.folder)) this.folder = "INBOX";
   },
 
   folderLabel(f) {
@@ -73,18 +80,16 @@ export default () => ({
   },
 
   async loadMessages() {
-    try {
-      this.messages = await api("/api/messages?folder=" + encode(this.folder));
-    } catch (err) {
-      this.$store.app.notify(err.message, true);
-      return;
-    }
-    if (this.selectedId && !this.messages.some((m) => m.id === this.selectedId)) this.close();
+    const seq = ++this.messagesSeq;
+    const messages = await api(withFolder("/api/messages", this.folder));
+    if (seq !== this.messagesSeq) return;
+    this.messages = messages;
+    if (this.selectedId && !messages.some((m) => m.id === this.selectedId)) this.close();
   },
 
   changeFolder() {
     this.close();
-    this.loadMessages();
+    return this.$store.app.run(() => this.loadMessages());
   },
 
   async refresh() {
@@ -92,7 +97,7 @@ export default () => ({
     this.refreshing = true;
     try {
       await Promise.all([this.loadFolders(), this.loadMessages(), this.$store.app.loadStatus(), new Promise((r) => setTimeout(r, 400))]);
-      if (this.selectedId) await this.select(this.selectedId);
+      if (this.selectedId && !(await this.select(this.selectedId))) return;
       this.$store.app.notify("Caixa de entrada atualizada: " + plural(this.messages.length, "mensagem", "mensagens"));
     } catch (err) {
       this.$store.app.notify(err.message, true);
@@ -108,13 +113,14 @@ export default () => ({
       detail = await api("/api/messages/" + id);
     } catch (err) {
       this.$store.app.notify(err.message, true);
-      return;
+      return false;
     }
-    if (this.selectedId !== id) return;
+    if (this.selectedId !== id) return false;
     this.detail = detail;
     this.source = "";
     this.showTab(this.available(this.preferredTab) ? this.preferredTab : detail.hasHtml ? "html" : "text", false);
     if (!isSeen(detail.summary)) api(`/api/messages/${id}/seen`, { method: "POST", json: { seen: true } }).catch(() => { });
+    return true;
   },
 
   close() {
@@ -137,14 +143,16 @@ export default () => ({
   async showTab(tab, remember = true) {
     if (remember) this.preferredTab = tab;
     this.tab = tab;
-    if (tab === "source" && !this.source && this.detail) {
-      this.source = "Carregando...";
-      try {
-        this.source = await api(`/api/messages/${this.detail.summary.id}/raw`);
-      } catch (err) {
-        this.source = err.message;
-      }
+    const id = this.detail?.summary.id;
+    if (tab !== "source" || !id || this.source) return;
+    this.source = "Carregando...";
+    let text;
+    try {
+      text = await api(`/api/messages/${id}/raw`);
+    } catch (err) {
+      text = err.message;
     }
+    if (this.detail?.summary.id === id) this.source = text;
   },
 
   get htmlSrc() {
@@ -173,7 +181,7 @@ export default () => ({
       ["Aviso", d.parseError],
       ["Origem", s.source],
       ["MAIL FROM", s.envelopeFrom || "(vazio)"],
-      ["RCPT TO", (s.envelopeTo || []).join(", ")],
+      ["RCPT TO", (s.envelopeTo ?? []).join(", ")],
       ["Cliente", s.clientAddress],
       ["Autenticado como", s.authenticatedUser || "(sem autenticação)"],
       ["Pasta", s.folder],
@@ -193,27 +201,32 @@ export default () => ({
     return `${a.contentType} · ${fmtSize(a.size)}${a.inline ? " · inline" : ""}${a.contentId ? " · cid:" + a.contentId : ""}`;
   },
 
-  async remove() {
-    if (!this.selectedId) return;
-    await api("/api/messages/" + this.selectedId, { method: "DELETE" });
-    this.close();
+  remove() {
+    const id = this.selectedId;
+    if (!id) return;
+    return this.$store.app.run(async () => {
+      await api("/api/messages/" + id, { method: "DELETE" });
+      if (this.selectedId === id) this.close();
+    });
   },
 
-  async markUnread() {
-    if (!this.selectedId) return;
-    await api(`/api/messages/${this.selectedId}/seen`, { method: "POST", json: { seen: false } });
-    this.$store.app.notify("Marcada como não lida");
+  markUnread() {
+    const id = this.selectedId;
+    if (!id) return;
+    return this.$store.app.run(() => api(`/api/messages/${id}/seen`, { method: "POST", json: { seen: false } }), "Marcada como não lida");
   },
 
   readAll() {
-    return api("/api/messages/seen-all?folder=" + encode(this.folder), { method: "POST" });
+    return this.$store.app.run(() => api(withFolder("/api/messages/seen-all", this.folder), { method: "POST" }));
   },
 
-  async deleteAll() {
+  deleteAll() {
     const where = this.folder === "*" ? "de todas as pastas" : "desta pasta";
     if (!confirm(`Apagar todas as mensagens ${where}?`)) return;
-    await api("/api/messages?folder=" + encode(this.folder), { method: "DELETE" });
-    this.close();
+    return this.$store.app.run(async () => {
+      await api(withFolder("/api/messages", this.folder), { method: "DELETE" });
+      this.close();
+    });
   },
 
   openSend() {
@@ -221,15 +234,23 @@ export default () => ({
   },
 
   onKey(e) {
-    if (this.$store.app.view !== "inbox" || e.target.matches("input, textarea, select") || document.querySelector("dialog[open]")) return;
+    if (this.$store.app.view !== "inbox" || this.$store.app.stopped || e.ctrlKey || e.altKey || e.metaKey) return;
+    if (!(e.target instanceof Element) || e.target.matches("input, textarea, select") || document.querySelector("dialog[open]")) return;
     if (e.key === "Delete" && this.selectedId) this.remove();
-    if (!["ArrowDown", "ArrowUp", "j", "k"].includes(e.key)) return;
+    const step = STEPS.get(e.key);
+    if (!step) return;
+    const inList = Boolean(e.target.closest(".items"));
+    if (e.key.startsWith("Arrow") && !inList) return;
     const list = this.filtered;
     if (list.length === 0) return;
     const i = list.findIndex((m) => m.id === this.selectedId);
-    const next = e.key === "ArrowDown" || e.key === "j" ? Math.min(list.length - 1, i + 1) : Math.max(0, i - 1);
-    this.select(list[next].id);
-    this.$nextTick(() => this.$root.querySelector(`[data-id="${list[next].id}"]`)?.scrollIntoView({ block: "nearest" }));
+    const next = list[step > 0 ? Math.min(list.length - 1, i + 1) : Math.max(0, i - 1)].id;
+    this.select(next);
+    this.$nextTick(() => {
+      const item = this.$root.querySelector(`[data-id="${next}"]`);
+      item?.scrollIntoView({ block: "nearest" });
+      if (inList) item?.focus();
+    });
     e.preventDefault();
   },
 });

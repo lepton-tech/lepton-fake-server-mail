@@ -26,8 +26,9 @@
       </div>
       <ul class="items" id="messages">
         <template x-for="m in filtered" :key="m.id">
-          <li :data-id="m.id" :class="{ unread: !isSeen(m), selected: m.id === selectedId }" @click="select(m.id)">
+          <li :data-id="m.id" tabindex="0" :aria-current="m.id === selectedId" :class="{ unread: !isSeen(m), selected: m.id === selectedId }" @click="select(m.id)" @keydown.enter.prevent="select(m.id)" @keydown.space.prevent="select(m.id)">
             <span class="who" x-text="who(m)"></span>
+            <span class="sr-only" x-show="!isSeen(m)">não lida</span>
             <span class="when" x-text="fmtShort(m.receivedAt)"></span>
             <span class="subject" x-text="m.subject || '(sem assunto)'"></span>
             <span class="meta">
@@ -43,6 +44,10 @@
       <div class="empty" x-show="messages.length === 0">
         <p><b>Nenhuma mensagem ainda.</b></p>
         <p>Envie um e-mail para <code x-text="smtpAddress"></code> ou clique em <b>Enviar teste</b>.</p>
+      </div>
+      <div class="empty" x-show="messages.length > 0 && filtered.length === 0">
+        <p><b>Nenhuma mensagem encontrada para essa busca.</b></p>
+        <p>Confira o texto digitado ou apague a busca para ver todas as mensagens.</p>
       </div>
     </aside>
 
@@ -61,13 +66,13 @@
             <h1 x-text="detail.subject || '(sem assunto)'"></h1>
             <dl class="fields">
               <template x-for="row in fieldRows" :key="row[0]">
-                <div style="display: contents"><dt x-text="row[0]"></dt><dd x-text="row[1]"></dd></div>
+                <div><dt x-text="row[0]"></dt><dd x-text="row[1]"></dd></div>
               </template>
             </dl>
           </div>
           <div class="subtabs">
             <template x-for="t in tabs" :key="t.id">
-              <button :class="{ active: tab === t.id }" :disabled="!available(t.id)" @click="showTab(t.id)" x-text="tabLabel(t)"></button>
+              <button :class="{ active: tab === t.id }" :aria-pressed="tab === t.id" :disabled="!available(t.id)" @click="showTab(t.id)" x-text="tabLabel(t)"></button>
             </template>
           </div>
           <div class="tab-body">
@@ -84,12 +89,14 @@
               <div class="attachments">
                 <template x-for="a in detail.attachments" :key="a.index">
                   <div class="attachment">
-                    <img x-show="a.contentType.startsWith('image/')" :src="a.contentType.startsWith('image/') ? partUrl(a) : ''" alt="">
+                    <template x-if="a.contentType.startsWith('image/')">
+                      <img :src="partUrl(a)" alt="">
+                    </template>
                     <span class="name" x-text="a.fileName"></span>
                     <span class="info" x-text="attachmentInfo(a)"></span>
                     <div class="actions left">
-                      <a class="button ghost" :href="partUrl(a)" target="_blank" rel="noopener">Abrir</a>
-                      <a class="button ghost" :href="partUrl(a, true)">Baixar</a>
+                      <a class="button ghost" :href="partUrl(a)" target="_blank" rel="noopener" :aria-label="'Abrir ' + a.fileName">Abrir</a>
+                      <a class="button ghost" :href="partUrl(a, true)" :aria-label="'Baixar ' + a.fileName">Baixar</a>
                     </div>
                   </div>
                 </template>

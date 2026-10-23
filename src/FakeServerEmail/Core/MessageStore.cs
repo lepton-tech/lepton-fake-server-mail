@@ -41,15 +41,26 @@ public enum StoreChangeKind { Added, Removed, Updated, Folders }
 
 public sealed record StoreChange(StoreChangeKind Kind, IReadOnlyList<string> Ids);
 
+public sealed record MessageCounts(int Messages, int Unread);
+
+public sealed record FolderSummary(string Name, int Total, int Unread);
+
 public sealed class MessageStore : IDisposable
 {
     public const string Inbox = "INBOX";
-    public static readonly string[] DefaultFolders = [Inbox, "Sent", "Drafts", "Trash", "Junk"];
+    public const string RecoveredSource = "Recuperada";
+    public static readonly IReadOnlyList<string> DefaultFolders = [Inbox, "Sent", "Drafts", "Trash", "Junk"];
+
+    private const int SaveDelayMilliseconds = 400;
+    private const int MaxCachedMessageBytes = 16 * 1024 * 1024;
+    private const long MaxCacheBytes = 96L * 1024 * 1024;
+    private const uint UidGapAfterUncleanShutdown = 1000;
 
     private sealed class StoreState
     {
         public uint UidValidity { get; set; }
         public uint NextUid { get; set; } = 1;
+        public bool CleanShutdown { get; set; }
         public List<string> Folders { get; set; } = [];
         public List<StoredMessage> Messages { get; set; } = [];
     }
@@ -57,6 +68,7 @@ public sealed class MessageStore : IDisposable
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     private readonly Lock _lock = new();
+    private readonly Lock _flushLock = new();
     private readonly string _directory;
     private readonly string _indexPath;
     private readonly List<StoredMessage> _messages = [];
@@ -67,12 +79,13 @@ public sealed class MessageStore : IDisposable
     private readonly Timer _saveTimer;
     private long _rawCacheBytes;
     private bool _dirty;
+    private bool _disposed;
 
     public MessageStore(string dataDirectory)
     {
-        _directory = Path.Combine(dataDirectory, "mensagens");
+        _directory = Path.Combine(dataDirectory, DataFiles.MessagesDirectory);
         Directory.CreateDirectory(_directory);
-        _indexPath = Path.Combine(_directory, "indice.json");
+        _indexPath = Path.Combine(_directory, DataFiles.MessageIndex);
         _saveTimer = new Timer(_ => Flush(), null, Timeout.Infinite, Timeout.Infinite);
         Load();
     }
@@ -128,6 +141,22 @@ public sealed class MessageStore : IDisposable
                 .ToList();
     }
 
+    public MessageCounts Counts()
+    {
+        lock (_lock)
+            return new MessageCounts(_messages.Count, _messages.Count(m => !m.HasFlag(ImapFlags.Seen)));
+    }
+
+    public IReadOnlyList<FolderSummary> FolderSummaries()
+    {
+        lock (_lock)
+            return _folders.Select(f =>
+            {
+                var inFolder = _messages.Where(m => string.Equals(m.Folder, f, StringComparison.OrdinalIgnoreCase)).ToList();
+                return new FolderSummary(f, inFolder.Count, inFolder.Count(m => !m.HasFlag(ImapFlags.Seen)));
+            }).ToList();
+    }
+
     public StoredMessage? Get(string id)
     {
         lock (_lock)
@@ -149,7 +178,7 @@ public sealed class MessageStore : IDisposable
         {
             raw = File.ReadAllBytes(RawPath(id));
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return null;
         }
@@ -166,19 +195,28 @@ public sealed class MessageStore : IDisposable
         {
             foreach (var id in ids)
             {
-                if (!_byId.Remove(id, out var m))
+                if (!_byId.Remove(id))
                     continue;
-                _messages.Remove(m);
                 RemoveFromCache(id);
                 removed.Add(id);
             }
             if (removed.Count > 0)
+            {
+                var gone = removed.ToHashSet();
+                _messages.RemoveAll(m => gone.Contains(m.Id));
                 MarkDirty();
+            }
         }
 
         foreach (var id in removed)
         {
-            try { File.Delete(RawPath(id)); } catch { }
+            try
+            {
+                File.Delete(RawPath(id));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+            }
         }
 
         if (removed.Count > 0)
@@ -275,15 +313,16 @@ public sealed class MessageStore : IDisposable
     {
         if (name.Equals(Inbox, StringComparison.OrdinalIgnoreCase))
             return false;
+        List<string> ids;
         lock (_lock)
         {
-            var removed = _folders.RemoveAll(f => f.Equals(name, StringComparison.OrdinalIgnoreCase)
-                || f.StartsWith(name + "/", StringComparison.OrdinalIgnoreCase));
+            var removed = _folders.RemoveAll(f => IsSameOrChild(f, name));
             if (removed == 0)
                 return false;
+            ids = _messages.Where(m => IsSameOrChild(m.Folder, name)).Select(m => m.Id).ToList();
             MarkDirty();
         }
-        DeleteAll(name);
+        Delete(ids);
         Changed?.Invoke(new StoreChange(StoreChangeKind.Folders, []));
         return true;
     }
@@ -295,26 +334,18 @@ public sealed class MessageStore : IDisposable
         {
             if (_folders.Contains(to, StringComparer.OrdinalIgnoreCase))
                 return false;
-            var index = _folders.FindIndex(f => f.Equals(from, StringComparison.OrdinalIgnoreCase));
-            if (index < 0)
+            if (!_folders.Exists(f => f.Equals(from, StringComparison.OrdinalIgnoreCase)))
                 return false;
 
             for (var i = 0; i < _folders.Count; i++)
             {
-                if (_folders[i].Equals(from, StringComparison.OrdinalIgnoreCase))
-                    _folders[i] = to;
-                else if (_folders[i].StartsWith(from + "/", StringComparison.OrdinalIgnoreCase))
+                if (IsSameOrChild(_folders[i], from))
                     _folders[i] = to + _folders[i][from.Length..];
             }
 
-            foreach (var m in _messages)
+            foreach (var m in _messages.Where(m => IsSameOrChild(m.Folder, from)))
             {
-                if (m.Folder.Equals(from, StringComparison.OrdinalIgnoreCase))
-                    m.Folder = to;
-                else if (m.Folder.StartsWith(from + "/", StringComparison.OrdinalIgnoreCase))
-                    m.Folder = to + m.Folder[from.Length..];
-                else
-                    continue;
+                m.Folder = to + m.Folder[from.Length..];
                 changed.Add(m.Id);
             }
 
@@ -367,56 +398,73 @@ public sealed class MessageStore : IDisposable
         return m.EnvelopeTo.Any(r => r.Equals(user, StringComparison.OrdinalIgnoreCase));
     }
 
-    public void Flush()
-    {
-        StoreState state;
-        lock (_lock)
-        {
-            if (!_dirty)
-                return;
-            _dirty = false;
-            state = new StoreState
-            {
-                UidValidity = UidValidity,
-                NextUid = NextUid,
-                Folders = [.. _folders],
-                Messages = _messages.Select(m => m.Snapshot()).ToList(),
-            };
-        }
-
-        try
-        {
-            var temp = _indexPath + ".tmp";
-            File.WriteAllText(temp, JsonSerializer.Serialize(state, JsonOptions));
-            File.Move(temp, _indexPath, true);
-        }
-        catch
-        {
-            lock (_lock)
-                MarkDirty();
-        }
-    }
+    public void Flush() => Flush(cleanShutdown: false);
 
     public void Dispose()
     {
-        _saveTimer.Dispose();
-        Flush();
+        using (var callbacksDone = new ManualResetEvent(false))
+        {
+            if (_saveTimer.Dispose(callbacksDone))
+                callbacksDone.WaitOne();
+        }
+        lock (_lock)
+        {
+            _disposed = true;
+            _dirty = true;
+        }
+        Flush(cleanShutdown: true);
+    }
+
+    private void Flush(bool cleanShutdown)
+    {
+        lock (_flushLock)
+        {
+            StoreState state;
+            lock (_lock)
+            {
+                if (!_dirty)
+                    return;
+                _dirty = false;
+                state = new StoreState
+                {
+                    UidValidity = UidValidity,
+                    NextUid = NextUid,
+                    CleanShutdown = cleanShutdown,
+                    Folders = [.. _folders],
+                    Messages = _messages.Select(m => m.Snapshot()).ToList(),
+                };
+            }
+
+            try
+            {
+                var temp = _indexPath + DataFiles.TemporarySuffix;
+                File.WriteAllText(temp, JsonSerializer.Serialize(state, JsonOptions));
+                File.Move(temp, _indexPath, true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                lock (_lock)
+                    MarkDirty();
+            }
+        }
     }
 
     private void Load()
     {
         StoreState? state = null;
+        var hadIndex = File.Exists(_indexPath);
         try
         {
-            if (File.Exists(_indexPath))
+            if (hadIndex)
                 state = JsonSerializer.Deserialize<StoreState>(File.ReadAllText(_indexPath), JsonOptions);
         }
-        catch
+        catch (Exception ex) when (ex is JsonException or IOException)
         {
             state = null;
         }
 
-        state ??= RebuildFromFiles();
+        var recovered = state is null;
+        state ??= new StoreState();
         if (state.UidValidity == 0)
             state.UidValidity = (uint)Math.Max(1, DateTimeOffset.UtcNow.ToUnixTimeSeconds() % int.MaxValue);
 
@@ -430,7 +478,8 @@ public sealed class MessageStore : IDisposable
             _byId[m.Id] = m;
         }
 
-        NextUid = Math.Max(state.NextUid, _messages.Count == 0 ? 1 : _messages.Max(m => m.Uid) + 1);
+        var nextUid = Math.Max(state.NextUid, _messages.Count == 0 ? 1 : _messages.Max(m => m.Uid) + 1);
+        NextUid = hadIndex && !recovered && !state.CleanShutdown ? nextUid + UidGapAfterUncleanShutdown : nextUid;
 
         foreach (var file in Directory.GetFiles(_directory, "*.eml").Select(f => new FileInfo(f)).OrderBy(f => f.CreationTimeUtc))
         {
@@ -440,12 +489,12 @@ public sealed class MessageStore : IDisposable
             try
             {
                 var raw = File.ReadAllBytes(file.FullName);
-                var orphan = new StoredMessage { Id = id, Uid = NextUid++, ReceivedAt = file.CreationTime, Size = raw.LongLength, Source = "Recuperada" };
+                var orphan = new StoredMessage { Id = id, Uid = NextUid++, ReceivedAt = file.CreationTime, Size = raw.LongLength, Source = RecoveredSource };
                 FillMetadata(orphan, raw);
                 _messages.Add(orphan);
                 _byId[id] = orphan;
             }
-            catch
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
             }
         }
@@ -458,31 +507,8 @@ public sealed class MessageStore : IDisposable
         Flush();
     }
 
-    private StoreState RebuildFromFiles()
-    {
-        var state = new StoreState();
-        foreach (var file in Directory.GetFiles(_directory, "*.eml").Select(f => new FileInfo(f)).OrderBy(f => f.CreationTimeUtc))
-        {
-            try
-            {
-                var raw = File.ReadAllBytes(file.FullName);
-                var m = new StoredMessage
-                {
-                    Id = Path.GetFileNameWithoutExtension(file.Name),
-                    Uid = state.NextUid++,
-                    ReceivedAt = file.CreationTime,
-                    Size = raw.LongLength,
-                    Source = "Recuperada",
-                };
-                FillMetadata(m, raw);
-                state.Messages.Add(m);
-            }
-            catch
-            {
-            }
-        }
-        return state;
-    }
+    private static bool IsSameOrChild(string folder, string root) =>
+        folder.Equals(root, StringComparison.OrdinalIgnoreCase) || folder.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase);
 
     private static void FillMetadata(StoredMessage message, byte[] raw)
     {
@@ -500,7 +526,7 @@ public sealed class MessageStore : IDisposable
                 message.EnvelopeTo = parsed.To.Mailboxes.Concat(parsed.Cc.Mailboxes).Concat(parsed.Bcc.Mailboxes).Select(a => a.Address).ToList();
             message.EnvelopeFrom ??= parsed.From.Mailboxes.FirstOrDefault()?.Address;
         }
-        catch
+        catch (Exception)
         {
             message.Subject = "(mensagem não pôde ser interpretada)";
         }
@@ -511,17 +537,20 @@ public sealed class MessageStore : IDisposable
     private void MarkDirty()
     {
         _dirty = true;
-        _saveTimer.Change(400, Timeout.Infinite);
+        if (_disposed)
+            ThreadPool.UnsafeQueueUserWorkItem(_ => Flush(), null);
+        else
+            _saveTimer.Change(SaveDelayMilliseconds, Timeout.Infinite);
     }
 
     private void CacheRaw(string id, byte[] raw)
     {
-        if (_rawCache.ContainsKey(id) || raw.Length > 16 * 1024 * 1024)
+        if (_rawCache.ContainsKey(id) || raw.Length > MaxCachedMessageBytes)
             return;
         _rawCache[id] = raw;
         _rawCacheOrder.Enqueue(id);
         _rawCacheBytes += raw.Length;
-        while (_rawCacheBytes > 96L * 1024 * 1024 && _rawCacheOrder.Count > 0)
+        while (_rawCacheBytes > MaxCacheBytes && _rawCacheOrder.Count > 0)
             RemoveFromCache(_rawCacheOrder.Dequeue());
     }
 
@@ -539,5 +568,5 @@ public static class ImapFlags
     public const string Flagged = @"\Flagged";
     public const string Deleted = @"\Deleted";
     public const string Draft = @"\Draft";
-    public static readonly string[] System = [Answered, Flagged, Deleted, Seen, Draft];
+    public static readonly IReadOnlyList<string> System = [Answered, Flagged, Deleted, Seen, Draft];
 }

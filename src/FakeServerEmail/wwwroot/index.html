@@ -11,27 +11,32 @@
 <script type="module" src="js/main.js"></script>
 </head>
 <body>
-<header class="topbar" x-data x-cloak>
+<header class="topbar" x-data x-cloak :inert="Boolean($store.app.stopped)">
   <div class="brand">
     <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="2" y="6" width="28" height="20" rx="4"/><path d="M5 10l11 8 11-8"/></svg>
     <span>Fake Server Email</span>
   </div>
-  <nav class="tabs" role="tablist">
+  <nav class="tabs" aria-label="Telas do programa">
     <template x-for="tab in $store.app.tabs" :key="tab.id">
-      <button role="tab" :data-view="tab.id" :class="{ active: $store.app.view === tab.id }" :aria-selected="$store.app.view === tab.id" @click="$store.app.setView(tab.id)">
+      <button :data-view="tab.id" :class="{ active: $store.app.view === tab.id }" :aria-current="$store.app.view === tab.id ? 'page' : null" @click="$store.app.setView(tab.id)">
         <span x-text="tab.label"></span>
         <span class="badge" x-show="tab.id === 'inbox' && $store.app.unread > 0" x-text="$store.app.unread"></span>
+        <span class="sr-only" x-show="tab.id === 'inbox' && $store.app.unread > 0" x-text="$store.app.unread === 1 ? 'não lida' : 'não lidas'"></span>
       </button>
     </template>
   </nav>
   <div class="services">
     <template x-for="pill in $store.app.pills" :key="pill.label">
-      <span class="pill" :class="pill.state" :title="pill.title"><span x-text="pill.label"></span> <b x-text="pill.ports"></b></span>
+      <span class="pill" :class="pill.state" :title="pill.title"><span x-text="pill.label"></span> <b x-text="pill.ports"></b><span class="sr-only" x-show="pill.stateText" x-text="', ' + pill.stateText"></span></span>
     </template>
   </div>
 </header>
 
-<main>
+<div class="offline" x-data x-cloak x-show="$store.app.offline && !$store.app.stopped" role="alert">
+  <b>Sem conexão com o servidor.</b> Se o Fake Server Email foi fechado, abra o programa de novo. Esta página volta a funcionar sozinha quando a conexão voltar.
+</div>
+
+<main x-data :inert="Boolean($store.app.stopped)">
   <div data-include="views/inbox.html"></div>
   <div data-include="views/oauth.html"></div>
   <div data-include="views/sessions.html"></div>
@@ -41,16 +46,23 @@
 
 <div data-include="views/send-dialog.html"></div>
 
-<div class="toast" x-data x-cloak x-show="$store.app.toast.visible" :class="{ error: $store.app.toast.error }" x-text="$store.app.toast.text" role="status"></div>
+<div class="toast" x-data x-cloak :class="{ visible: $store.app.toast.visible, error: $store.app.toast.error }">
+  <span role="status" x-text="$store.app.toast.visible && !$store.app.toast.error ? $store.app.toast.text : ''"></span>
+  <span role="alert" x-text="$store.app.toast.visible && $store.app.toast.error ? $store.app.toast.text : ''"></span>
+</div>
 
-<div class="stopped" x-data x-cloak x-show="$store.app.stopped">
-  <div>
-    <h2 x-text="$store.app.stopped?.title"></h2>
-    <p x-text="$store.app.stopped?.message"></p>
-    <p x-show="$store.app.stopped?.path"><code x-text="$store.app.stopped?.path"></code></p>
-    <p x-show="$store.app.stopped?.warning" style="color: var(--danger)" x-text="$store.app.stopped?.warning"></p>
-    <p x-show="$store.app.stopped?.hint" x-text="$store.app.stopped?.hint"></p>
-  </div>
+<div x-data>
+  <template x-if="$store.app.stopped">
+    <div class="stopped" role="alertdialog" aria-modal="true" aria-labelledby="stopped-title" aria-describedby="stopped-message" x-init="$nextTick(() => $refs.title.focus())">
+      <div>
+        <h2 id="stopped-title" tabindex="-1" x-ref="title" x-text="$store.app.stopped?.title"></h2>
+        <p id="stopped-message" x-text="$store.app.stopped?.message"></p>
+        <p x-show="$store.app.stopped?.path"><code x-text="$store.app.stopped?.path"></code></p>
+        <p class="warning" x-show="$store.app.stopped?.warning" x-text="$store.app.stopped?.warning"></p>
+        <p x-show="$store.app.stopped?.hint" x-text="$store.app.stopped?.hint"></p>
+      </div>
+    </div>
+  </template>
 </div>
 </body>
 </html>

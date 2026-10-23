@@ -1,6 +1,8 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using FakeServerEmail.Core;
 using MimeKit;
+using MimeKit.IO;
 
 namespace FakeServerEmail.Web;
 
@@ -26,14 +28,14 @@ public sealed record MessageDetail(
 
 public static partial class MessageView
 {
-    public static MimeMessage? Parse(byte[] raw)
+    private static MimeMessage? Parse(byte[] raw)
     {
         try
         {
             using var ms = new MemoryStream(raw, false);
             return MimeMessage.Load(ms);
         }
-        catch
+        catch (Exception)
         {
             return null;
         }
@@ -44,7 +46,7 @@ public static partial class MessageView
         var message = Parse(raw);
         if (message is null)
             return new MessageDetail(summary, summary.Subject, summary.From, summary.To, summary.Cc, "", "", summary.Date, null, false,
-                System.Text.Encoding.UTF8.GetString(raw), [], [], "Não foi possível interpretar a mensagem; exibindo o conteúdo bruto.");
+                Encoding.UTF8.GetString(raw), [], [], "Não foi possível interpretar a mensagem; exibindo o conteúdo bruto.");
 
         var parts = message.BodyParts.ToList();
         var attachments = new List<AttachmentInfo>();
@@ -113,9 +115,11 @@ public static partial class MessageView
     {
         try
         {
-            return Decode(part).LongLength;
+            using var measure = new MeasuringStream();
+            part.Content?.DecodeTo(measure);
+            return measure.Length;
         }
-        catch
+        catch (Exception)
         {
             return 0;
         }

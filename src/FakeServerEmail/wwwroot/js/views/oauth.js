@@ -1,5 +1,5 @@
 import { api } from "../lib/api.js";
-import { debounce, fmtDate, fmtTime } from "../lib/format.js";
+import { debounce, fmtDate, fmtShort } from "../lib/format.js";
 
 export default () => ({
   tokens: [],
@@ -9,13 +9,18 @@ export default () => ({
     lifetimeSeconds: "",
   },
   generated: "",
+  now: Date.now(),
 
   init() {
-    const changed = debounce(() => this.active() && this.load(), 200);
+    const quiet = () => this.active() && this.load();
+    const changed = debounce(quiet, 200);
     window.addEventListener("fse-tokens", changed);
     window.addEventListener("fse-connected", changed);
-    this.$watch("$store.app.view", () => this.active() && this.load());
-    if (this.active()) this.load();
+    this.$watch("$store.app.view", quiet);
+    quiet();
+    setInterval(() => {
+      if (this.active()) this.now = Date.now();
+    }, 10000);
   },
 
   fmtDate,
@@ -43,34 +48,32 @@ export default () => ({
   async load() {
     try {
       this.tokens = await api("/api/oauth/tokens");
+      this.now = Date.now();
     } catch { }
   },
 
   status(t) {
     if (t.revoked) return { text: "revogado", cls: "bad" };
-    if (new Date(t.expiresAt).getTime() < Date.now()) return { text: "expirado", cls: "warn" };
-    return { text: "válido até " + fmtTime(t.expiresAt), cls: "ok" };
+    if (new Date(t.expiresAt).getTime() < this.now) return { text: "expirado", cls: "warn" };
+    return { text: "válido até " + fmtShort(t.expiresAt), cls: "ok" };
   },
 
-  async generate() {
-    try {
+  generate() {
+    return this.$store.app.run(async () => {
       const t = await api("/api/oauth/tokens", {
         method: "POST",
         json: { user: this.form.user, scope: this.form.scope, lifetimeSeconds: parseInt(this.form.lifetimeSeconds || "0", 10) || null },
       });
       this.generated = t.accessToken;
-      this.load();
-    } catch (err) {
-      this.$store.app.notify(err.message, true);
-    }
+    });
   },
 
-  async revoke(t) {
-    await api("/api/oauth/tokens/" + t.jti, { method: "DELETE" });
+  revoke(t) {
+    return this.$store.app.run(() => api("/api/oauth/tokens/" + encodeURIComponent(t.jti), { method: "DELETE" }));
   },
 
-  async clear() {
+  clear() {
     if (!confirm("Apagar o histórico de tokens e todos os refresh tokens?")) return;
-    await api("/api/oauth/tokens", { method: "DELETE" });
+    return this.$store.app.run(() => api("/api/oauth/tokens", { method: "DELETE" }));
   },
 });

@@ -9,13 +9,24 @@ const TABS = [
   { id: "settings", label: "Configurações" },
 ];
 
+function pillState(items, running) {
+  if (running.length === 0) return { state: "off", stateText: "parado" };
+  if (items.some((s) => !s.running)) return { state: "moved", stateText: "um dos serviços está parado" };
+  if (running.some((s) => s.port !== s.configuredPort)) return { state: "moved", stateText: "usando outra porta, porque a configurada não estava disponível" };
+  return { state: "", stateText: "" };
+}
+
 export function createAppStore() {
+  let statusSeq = 0;
+
   return {
     tabs: TABS,
     status: null,
     view: "inbox",
     anchor: null,
     stopped: null,
+    offline: false,
+    offlineTimer: null,
     toast: { text: "", error: false, visible: false },
     toastTimer: null,
 
@@ -28,12 +39,27 @@ export function createAppStore() {
       const reload = debounce(() => this.loadStatus(), 200);
       for (const name of ["fse-messages", "fse-settings", "fse-status", "fse-connected"])
         window.addEventListener(name, reload);
+      window.addEventListener("fse-disconnected", () => {
+        this.offlineTimer ??= setTimeout(() => (this.offline = true), 2000);
+      });
+      window.addEventListener("fse-connected", () => {
+        clearTimeout(this.offlineTimer);
+        this.offlineTimer = null;
+        this.offline = false;
+      });
     },
 
     async loadStatus() {
+      const seq = ++statusSeq;
       try {
-        this.status = await api("/api/status");
+        const status = await api("/api/status");
+        if (seq === statusSeq) this.status = status;
       } catch { }
+    },
+
+    setStatus(status) {
+      statusSeq++;
+      this.status = status;
     },
 
     setView(view, anchor = null) {
@@ -46,6 +72,16 @@ export function createAppStore() {
       this.toast = { text, error, visible: true };
       clearTimeout(this.toastTimer);
       this.toastTimer = setTimeout(() => (this.toast.visible = false), error ? 6000 : 2500);
+    },
+
+    async run(action, success) {
+      try {
+        const result = await action();
+        if (success) this.notify(success);
+        return result;
+      } catch (err) {
+        this.notify(err.message, true);
+      }
     },
 
     async copy(text) {
@@ -84,13 +120,13 @@ export function createAppStore() {
         return {
           label: protocol,
           ports: running.map((s) => s.port).join(" · ") || "—",
-          state: running.length === 0 ? "off" : items.some((s) => !s.running || s.port !== s.configuredPort) ? "moved" : "",
+          ...pillState(items, running),
           title: items.map((s) => `${s.name}: ${s.running ? "porta " + s.port : "parado"}${s.error ? " (" + s.error + ")" : ""}`).join("\n"),
           visible: items.length > 0,
         };
       }).filter((g) => g.visible);
       if (st.web.httpPort)
-        groups.push({ label: "Web", ports: st.web.httpPort + (st.web.httpsPort ? " · " + st.web.httpsPort : ""), state: "", title: "Interface web e OAuth" });
+        groups.push({ label: "Web", ports: st.web.httpPort + (st.web.httpsPort ? " · " + st.web.httpsPort : ""), state: "", stateText: "", title: "Interface web e OAuth" });
       return groups;
     },
 

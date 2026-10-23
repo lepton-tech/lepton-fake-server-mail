@@ -12,28 +12,28 @@
               <tr>
                 <th>Host</th>
                 <td>
-                  <div class="copy-row"><code>localhost</code><button class="ghost" @click="$store.app.copy('localhost')">Copiar</button></div>
+                  <div class="copy-row"><code>localhost</code><button class="ghost" aria-label="Copiar o host" @click="$store.app.copy('localhost')">Copiar</button></div>
                   <span class="muted small" x-show="ctx.network">De containers Docker: host.docker.internal. De outras máquinas: o IP deste computador.</span>
                 </td>
               </tr>
               <tr>
                 <th>Usuário</th>
                 <td>
-                  <div class="copy-row"><code x-text="ctx.user"></code><button class="ghost" @click="$store.app.copy(ctx.user)">Copiar</button></div>
+                  <div class="copy-row"><code x-text="ctx.user"></code><button class="ghost" aria-label="Copiar o usuário" @click="$store.app.copy(ctx.user)">Copiar</button></div>
                   <span class="muted small" x-text="ctx.acceptAny ? 'Qualquer usuário é aceito.' : 'Usuário cadastrado em Configurações.'"></span>
                 </td>
               </tr>
               <tr>
                 <th>Senha</th>
                 <td>
-                  <div class="copy-row"><code x-text="ctx.pass"></code><button class="ghost" @click="$store.app.copy(ctx.pass)">Copiar</button></div>
+                  <div class="copy-row"><code x-text="ctx.pass"></code><button class="ghost" aria-label="Copiar a senha" @click="$store.app.copy(ctx.pass)">Copiar</button></div>
                   <span class="muted small" x-text="ctx.acceptAny ? 'Qualquer senha é aceita.' : 'Senha cadastrada em Configurações.'"></span>
                 </td>
               </tr>
               <tr>
                 <th>Token OAuth</th>
                 <td>
-                  <div class="copy-row"><code x-text="ctx.tokenUrl"></code><button class="ghost" @click="$store.app.copy(ctx.tokenUrl)">Copiar</button></div>
+                  <div class="copy-row"><code x-text="ctx.tokenUrl"></code><button class="ghost" aria-label="Copiar o endereço do token OAuth" @click="$store.app.copy(ctx.tokenUrl)">Copiar</button></div>
                   <span class="muted small">Use com <code>XOAUTH2</code> ou <code>OAUTHBEARER</code>.</span>
                 </td>
               </tr>
@@ -47,7 +47,7 @@
                 <tr>
                   <td x-text="s.name"></td>
                   <td>
-                    <div class="copy-row" x-show="s.running"><code x-text="s.port"></code><button class="ghost" @click="$store.app.copy(String(s.port))">Copiar</button></div>
+                    <div class="copy-row" x-show="s.running"><code x-text="s.port"></code><button class="ghost" :aria-label="'Copiar a porta do ' + s.name" @click="$store.app.copy(String(s.port))">Copiar</button></div>
                     <span x-show="!s.running">—</span>
                     <span class="tag warn" x-show="s.error" x-text="s.error"></span>
                   </td>
@@ -64,16 +64,16 @@
           <h3>Configuração pronta para colar</h3>
           <p class="muted small">Blocos completos com os valores reais deste servidor, inclusive as portas atuais. Escolha o formato do seu projeto e clique em Copiar.</p>
           <div x-data="{ group: 'config' }" class="snippet-group">
-            <div class="lang-tabs"><template x-for="lang in langs(group)" :key="lang"><button class="ghost" :class="{ active: activeLang(group) === lang }" @click="setLang(group, lang)" x-text="lang"></button></template></div>
-            <div class="snippet"><button class="ghost" @click="$store.app.copy(code(group))">Copiar</button><pre x-text="code(group)"></pre></div>
+            <div class="lang-tabs"><template x-for="lang in langs(group)" :key="lang"><button class="ghost" :class="{ active: activeLang(group) === lang }" :aria-pressed="activeLang(group) === lang" @click="setLang(group, lang)" x-text="lang"></button></template></div>
+            <div class="snippet"><button class="ghost" :aria-label="'Copiar o exemplo ' + activeLang(group)" @click="$store.app.copy(code(group))">Copiar</button><pre x-text="code(group)"></pre></div>
           </div>
         </div>
 
         <div class="card">
           <h3>Enviar e-mail (SMTP)</h3>
           <div x-data="{ group: 'smtp' }" class="snippet-group">
-            <div class="lang-tabs"><template x-for="lang in langs(group)" :key="lang"><button class="ghost" :class="{ active: activeLang(group) === lang }" @click="setLang(group, lang)" x-text="lang"></button></template></div>
-            <div class="snippet"><button class="ghost" @click="$store.app.copy(code(group))">Copiar</button><pre x-text="code(group)"></pre></div>
+            <div class="lang-tabs"><template x-for="lang in langs(group)" :key="lang"><button class="ghost" :class="{ active: activeLang(group) === lang }" :aria-pressed="activeLang(group) === lang" @click="setLang(group, lang)" x-text="lang"></button></template></div>
+            <div class="snippet"><button class="ghost" :aria-label="'Copiar o exemplo ' + activeLang(group)" @click="$store.app.copy(code(group))">Copiar</button><pre x-text="code(group)"></pre></div>
           </div>
         </div>
 
@@ -81,8 +81,8 @@
           <h3>Ler e-mails (IMAP e POP3)</h3>
           <p class="muted small" x-show="readingOff">O IMAP e o POP3 estão desligados. Se o aplicativo testado também busca e-mails numa caixa de entrada, ligue um deles em <a href="#" @click.prevent="openPorts()">Configurações → Portas</a>; os exemplos abaixo passam a mostrar a porta certa.</p>
           <div x-data="{ group: 'read' }" class="snippet-group">
-            <div class="lang-tabs"><template x-for="lang in langs(group)" :key="lang"><button class="ghost" :class="{ active: activeLang(group) === lang }" @click="setLang(group, lang)" x-text="lang"></button></template></div>
-            <div class="snippet"><button class="ghost" @click="$store.app.copy(code(group))">Copiar</button><pre x-text="code(group)"></pre></div>
+            <div class="lang-tabs"><template x-for="lang in langs(group)" :key="lang"><button class="ghost" :class="{ active: activeLang(group) === lang }" :aria-pressed="activeLang(group) === lang" @click="setLang(group, lang)" x-text="lang"></button></template></div>
+            <div class="snippet"><button class="ghost" :aria-label="'Copiar o exemplo ' + activeLang(group)" @click="$store.app.copy(code(group))">Copiar</button><pre x-text="code(group)"></pre></div>
           </div>
         </div>
 
@@ -91,8 +91,8 @@
           <p class="muted small">1) Peça um token ao servidor OAuth falso. 2) Use o token no SMTP, POP3 ou IMAP com <code>XOAUTH2</code> ou <code>OAUTHBEARER</code>. Tokens expirados, revogados ou de outro usuário são recusados, como num servidor real.</p>
           <p class="muted small">Para bibliotecas da Microsoft (MSAL), use o authority <code x-text="ctx.authority"></code>; o token sai de <code x-text="ctx.msToken"></code>. A MSAL exige HTTPS confiável, então confie no certificado em <a href="#" @click.prevent="openCertificate()">Configurações → Certificado TLS</a>.</p>
           <div x-data="{ group: 'oauth' }" class="snippet-group">
-            <div class="lang-tabs"><template x-for="lang in langs(group)" :key="lang"><button class="ghost" :class="{ active: activeLang(group) === lang }" @click="setLang(group, lang)" x-text="lang"></button></template></div>
-            <div class="snippet"><button class="ghost" @click="$store.app.copy(code(group))">Copiar</button><pre x-text="code(group)"></pre></div>
+            <div class="lang-tabs"><template x-for="lang in langs(group)" :key="lang"><button class="ghost" :class="{ active: activeLang(group) === lang }" :aria-pressed="activeLang(group) === lang" @click="setLang(group, lang)" x-text="lang"></button></template></div>
+            <div class="snippet"><button class="ghost" :aria-label="'Copiar o exemplo ' + activeLang(group)" @click="$store.app.copy(code(group))">Copiar</button><pre x-text="code(group)"></pre></div>
           </div>
         </div>
 
@@ -104,8 +104,8 @@
             <li><b>stdio</b> (<code>FakeServerEmail.exe --mcp</code>): o agente inicia o processo. Se o aplicativo já estiver aberto, usa o mesmo servidor; se não estiver, sobe um em segundo plano.</li>
           </ul>
           <div x-data="{ group: 'mcp' }" class="snippet-group">
-            <div class="lang-tabs"><template x-for="lang in langs(group)" :key="lang"><button class="ghost" :class="{ active: activeLang(group) === lang }" @click="setLang(group, lang)" x-text="lang"></button></template></div>
-            <div class="snippet"><button class="ghost" @click="$store.app.copy(code(group))">Copiar</button><pre x-text="code(group)"></pre></div>
+            <div class="lang-tabs"><template x-for="lang in langs(group)" :key="lang"><button class="ghost" :class="{ active: activeLang(group) === lang }" :aria-pressed="activeLang(group) === lang" @click="setLang(group, lang)" x-text="lang"></button></template></div>
+            <div class="snippet"><button class="ghost" :aria-label="'Copiar o exemplo ' + activeLang(group)" @click="$store.app.copy(code(group))">Copiar</button><pre x-text="code(group)"></pre></div>
           </div>
           <p class="muted small">Ferramentas: <template x-for="(tool, i) in tools" :key="tool"><span><code x-text="tool"></code><span x-text="i < tools.length - 1 ? ', ' : '.'"></span></span></template></p>
         </div>

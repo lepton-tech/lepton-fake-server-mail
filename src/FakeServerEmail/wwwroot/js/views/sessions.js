@@ -1,10 +1,12 @@
 import { api } from "../lib/api.js";
-import { debounce, fmtDate, fmtShort, fmtTime } from "../lib/format.js";
+import { debounce, fmtDate, fmtShort, fmtTime, plural } from "../lib/format.js";
 
 const PREFIX = { C: "C: ", S: "S: " };
 const CLASS = { C: "c", S: "s" };
 
 export default () => ({
+  loadSeq: 0,
+  openSeq: 0,
   sessions: [],
   protocol: "",
   selectedId: null,
@@ -12,11 +14,12 @@ export default () => ({
   lines: [],
 
   init() {
-    const changed = debounce(() => this.active() && this.load(), 250);
+    const quiet = () => this.active() && this.load().catch(() => { });
+    const changed = debounce(quiet, 250);
     window.addEventListener("fse-sessions", changed);
     window.addEventListener("fse-connected", changed);
-    this.$watch("$store.app.view", () => this.active() && this.load());
-    if (this.active()) this.load();
+    this.$watch("$store.app.view", quiet);
+    quiet();
   },
 
   fmtShort,
@@ -30,51 +33,62 @@ export default () => ({
   },
 
   async load() {
-    try {
-      this.sessions = await api("/api/sessions");
-    } catch {
-      return;
-    }
-    if (this.selectedId) this.open(this.selectedId, false);
+    const seq = ++this.loadSeq;
+    const sessions = await api("/api/sessions");
+    if (seq !== this.loadSeq) return;
+    this.sessions = sessions;
+    if (this.selectedId) await this.open(this.selectedId, false);
   },
 
-  async open(id, scroll = true) {
+  refresh() {
+    return this.$store.app.run(() => this.load());
+  },
+
+  async open(id, fromUser = true) {
     this.selectedId = id;
+    const seq = ++this.openSeq;
     let data;
     try {
       data = await api("/api/sessions/" + id);
-    } catch {
+    } catch (err) {
+      if (fromUser && seq === this.openSeq) this.$store.app.notify(err.message, true);
       return;
     }
+    if (seq !== this.openSeq) return;
     const body = this.$refs.body;
     const atBottom = body && body.scrollTop + body.clientHeight >= body.scrollHeight - 30;
     this.current = data.session;
     this.lines = data.lines;
     this.$nextTick(() => {
-      if (this.$refs.body && (scroll || atBottom)) this.$refs.body.scrollTop = this.$refs.body.scrollHeight;
+      if (this.$refs.body && (fromUser || atBottom)) this.$refs.body.scrollTop = this.$refs.body.scrollHeight;
     });
   },
 
-  async clear() {
-    await api("/api/sessions", { method: "DELETE" });
-    this.selectedId = null;
-    this.current = null;
-    this.lines = [];
+  clear() {
+    return this.$store.app.run(async () => {
+      await api("/api/sessions", { method: "DELETE" });
+      this.close();
+    });
   },
 
   close() {
+    this.openSeq++;
+    this.selectedId = null;
     this.current = null;
+    this.lines = [];
   },
 
   tags(s) {
     const tags = [{ text: `${s.protocol} :${s.port}`, cls: "" }];
     if (s.secure) tags.push({ text: "TLS", cls: "ok" });
     if (s.user) tags.push({ text: `🔑 ${s.user}${s.authMechanism ? " · " + s.authMechanism : ""}`, cls: "ok" });
-    if (s.messagesReceived) tags.push({ text: `${s.messagesReceived} mensagem(ns)`, cls: "" });
-    if (s.failures || s.error) tags.push({ text: s.failures ? `${s.failures} falha(s)` : "erro", cls: "bad" });
-    if (!s.endedAt) tags.push({ text: "aberta", cls: "warn" });
+    if (s.messagesReceived) tags.push({ text: plural(s.messagesReceived, "mensagem", "mensagens"), cls: "" });
+    if (s.failures || s.error) tags.push({ text: s.failures ? plural(s.failures, "falha", "falhas") : "erro", cls: "bad" });
+    if (!s.endedAt) tags.push({ text: "aberta", cls: "live" });
     return tags;
   },
+
+  lineCount: (s) => plural(s.lineCount, "linha", "linhas"),
 
   get title() {
     return this.current ? `${this.current.protocol} · ${this.current.client}` : "";

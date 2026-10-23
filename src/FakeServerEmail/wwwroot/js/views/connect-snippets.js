@@ -1,11 +1,20 @@
+const PLAIN = /^[\w@.+\-/:]*$/;
+
+const str = (value) => JSON.stringify(String(value ?? ""));
+const env = (value) => (PLAIN.test(String(value ?? "")) ? String(value ?? "") : str(value));
+const prop = (value) => String(value ?? "").replace(/\\/g, "\\\\");
+const shell = (value) => (PLAIN.test(value) ? value : `'${value.replace(/'/g, "''")}'`);
+const toml = (value) => (value.includes("'") ? str(value) : `'${value}'`);
+
 export function buildSnippets(c) {
+  const login = shell(`${c.user}:${c.pass}`);
   return {
     config: {
       ".env": `SMTP_HOST=localhost
 SMTP_PORT=${c.smtp}
 SMTP_SECURE=false
-SMTP_USER=${c.user}
-SMTP_PASSWORD=${c.pass}
+SMTP_USER=${env(c.user)}
+SMTP_PASSWORD=${env(c.pass)}
 SMTP_FROM=app@teste.local
 IMAP_HOST=localhost
 IMAP_PORT=${c.imap}
@@ -27,15 +36,15 @@ OAUTH_SCOPE=https://outlook.office.com/.default`,
       }, null, 2),
       "Spring Boot": `spring.mail.host=localhost
 spring.mail.port=${c.smtp}
-spring.mail.username=${c.user}
-spring.mail.password=${c.pass}
+spring.mail.username=${prop(c.user)}
+spring.mail.password=${prop(c.pass)}
 spring.mail.properties.mail.smtp.auth=true
 spring.mail.properties.mail.smtp.starttls.enable=false`,
       "Django (settings.py)": `EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 EMAIL_HOST = "localhost"
 EMAIL_PORT = ${c.smtp}
-EMAIL_HOST_USER = "${c.user}"
-EMAIL_HOST_PASSWORD = "${c.pass}"
+EMAIL_HOST_USER = ${str(c.user)}
+EMAIL_HOST_PASSWORD = ${str(c.pass)}
 EMAIL_USE_TLS = False
 EMAIL_USE_SSL = False
 DEFAULT_FROM_EMAIL = "app@teste.local"`,
@@ -61,12 +70,12 @@ mensagem.Body = new TextPart("plain") { Text = "Mensagem de teste" };
 
 using var smtp = new SmtpClient();
 await smtp.ConnectAsync("localhost", ${c.smtp}, SecureSocketOptions.None);
-await smtp.AuthenticateAsync("${c.user}", "${c.pass}");
+await smtp.AuthenticateAsync(${str(c.user)}, ${str(c.pass)});
 await smtp.SendAsync(mensagem);
 await smtp.DisconnectAsync(true);`,
       "C# (System.Net.Mail)": `using var cliente = new System.Net.Mail.SmtpClient("localhost", ${c.smtp})
 {
-    Credentials = new System.Net.NetworkCredential("${c.user}", "${c.pass}"),
+    Credentials = new System.Net.NetworkCredential(${str(c.user)}, ${str(c.pass)}),
 };
 cliente.Send("app@teste.local", "cliente@teste.local", "Olá", "Mensagem de teste");`,
       "Python": `import smtplib
@@ -79,7 +88,7 @@ msg["Subject"] = "Olá"
 msg.set_content("Mensagem de teste")
 
 with smtplib.SMTP("localhost", ${c.smtp}) as s:
-    s.login("${c.user}", "${c.pass}")
+    s.login(${str(c.user)}, ${str(c.pass)})
     s.send_message(msg)`,
       "Node.js": `const nodemailer = require("nodemailer");
 
@@ -87,7 +96,7 @@ const transporte = nodemailer.createTransport({
   host: "localhost",
   port: ${c.smtp},
   secure: false,
-  auth: { user: "${c.user}", pass: "${c.pass}" },
+  auth: { user: ${str(c.user)}, pass: ${str(c.pass)} },
   tls: { rejectUnauthorized: false },
 });
 
@@ -104,7 +113,7 @@ using MailKit.Security;
 
 using var imap = new ImapClient();
 await imap.ConnectAsync("localhost", ${c.imap}, SecureSocketOptions.None);
-await imap.AuthenticateAsync("${c.user}", "${c.pass}");
+await imap.AuthenticateAsync(${str(c.user)}, ${str(c.pass)});
 await imap.Inbox.OpenAsync(FolderAccess.ReadWrite);
 foreach (var uid in await imap.Inbox.SearchAsync(SearchQuery.NotSeen))
 {
@@ -117,14 +126,14 @@ using MailKit.Security;
 
 using var pop = new Pop3Client();
 await pop.ConnectAsync("localhost", ${c.pop}, SecureSocketOptions.None);
-await pop.AuthenticateAsync("${c.user}", "${c.pass}");
+await pop.AuthenticateAsync(${str(c.user)}, ${str(c.pass)});
 for (var i = 0; i < pop.Count; i++)
     Console.WriteLine((await pop.GetMessageAsync(i)).Subject);
 await pop.DisconnectAsync(true);`,
       "Python IMAP": `import imaplib, email
 
 with imaplib.IMAP4("localhost", ${c.imap}) as imap:
-    imap.login("${c.user}", "${c.pass}")
+    imap.login(${str(c.user)}, ${str(c.pass)})
     imap.select("INBOX")
     _, ids = imap.search(None, "ALL")
     for num in ids[0].split():
@@ -133,14 +142,14 @@ with imaplib.IMAP4("localhost", ${c.imap}) as imap:
       "Python POP3": `import poplib, email
 
 pop = poplib.POP3("localhost", ${c.pop})
-pop.user("${c.user}")
-pop.pass_("${c.pass}")
+pop.user(${str(c.user)})
+pop.pass_(${str(c.pass)})
 for i in range(1, len(pop.list()[1]) + 1):
     print(email.message_from_bytes(b"\\r\\n".join(pop.retr(i)[1]))["Subject"])
 pop.quit()`,
-      "curl": `curl.exe "imap://localhost:${c.imap}/INBOX" -u ${c.user}:${c.pass} -X "SEARCH ALL"
-curl.exe "imap://localhost:${c.imap}/INBOX;UID=1" -u ${c.user}:${c.pass}
-curl.exe "pop3://localhost:${c.pop}/1" -u ${c.user}:${c.pass}`,
+      "curl": `curl.exe "imap://localhost:${c.imap}/INBOX" -u ${login} -X "SEARCH ALL"
+curl.exe "imap://localhost:${c.imap}/INBOX;UID=1" -u ${login}
+curl.exe "pop3://localhost:${c.pop}/1" -u ${login}`,
     },
 
     oauth: {
@@ -188,7 +197,7 @@ var resultado = await app.AcquireTokenForClient(["https://outlook.office.com/.de
       "VS Code (.vscode/mcp.json)": JSON.stringify({ servers: { "fake-email": { type: "http", url: c.mcpHttp } } }, null, 2),
       "Cursor (.cursor/mcp.json)": JSON.stringify({ mcpServers: { "fake-email": { url: c.mcpHttp } } }, null, 2),
       "Codex (config.toml)": `[mcp_servers.fake-email]
-command = '${c.exe}'
+command = ${toml(c.exe)}
 args = ["--mcp"]`,
     },
   };

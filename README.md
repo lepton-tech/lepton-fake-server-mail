@@ -72,12 +72,26 @@ Neste servidor, SMTP e SMTP submissão funcionam igual. Os dois existem porque c
 | sistema que lê e-mails por IMAP ou POP3 | ligue o serviço em **Portas** |
 | login com token OAuth (XOAUTH2, OAUTHBEARER) | aba **OAuth** |
 | mensagem grande demais | **Tamanho máximo da mensagem** |
+| HTTPS confiável para o IIS, serviços do Windows ou o Firefox | **Certificado TLS → Confiar para todo o computador** |
+
+## Certificado (HTTPS e TLS)
+
+As conexões com criptografia usam um certificado que o programa cria para `localhost` no primeiro uso. Para os sistemas aceitarem sem aviso, há duas opções em **Configurações → Certificado TLS**:
+
+- **Só para o meu usuário:** vale para os programas que você abre (Chrome, Edge, aplicativos .NET). Não precisa de administrador; o Windows mostra uma confirmação.
+- **Para todo o computador:** vale também para o IIS, serviços do Windows, outros usuários e o Firefox (quando ele usa os certificados do Windows). O Windows pede permissão de administrador.
+
+O certificado serve só para `localhost` e não é de autoridade certificadora: mesmo que alguém copie a chave, não consegue usá-la para outros sites. Para instalar pela linha de comando, baixe o `.cer` na mesma tela e rode, como administrador:
+
+```powershell
+Import-Certificate -FilePath .\fake-server-email-localhost.cer -CertStoreLocation Cert:\LocalMachine\Root
+```
 
 ## Dados e remoção
 
 Os e-mails, configurações, certificado e chave do OAuth ficam em `%LOCALAPPDATA%\FakeServerEmail`. Cada e-mail é um arquivo `.eml`.
 
-Em **Configurações → Dados guardados** dá para abrir essa pasta, apagar só os e-mails e tokens, ou remover tudo o que o programa gravou. Depois de remover tudo, basta apagar o `.exe`: nada mais fica no computador.
+Em **Configurações → Dados guardados** dá para abrir essa pasta, apagar só os e-mails e tokens, ou remover tudo o que o programa gravou. A remoção também tira o certificado da lista de confiáveis do Windows (do usuário ou do computador). Depois disso, basta apagar o `.exe`: nada mais fica no computador.
 
 Opções de linha de comando:
 
@@ -91,7 +105,7 @@ Opções de linha de comando:
 
 - **Autenticação:** mecanismos PLAIN, LOGIN, XOAUTH2 e OAUTHBEARER, com STARTTLS (STLS no POP3) nas portas sem TLS. Dá para escolher quais mecanismos anunciar e desligar o STARTTLS, para imitar servidores mais limitados.
 - **OAuth 2.0:** `authorization_code` com PKCE, `refresh_token`, `client_credentials`, `password` e `device_code`, com discovery OIDC, JWKS e rotas no estilo Microsoft (`/{tenant}/oauth2/v2.0/token`). Os tokens são JWT assinados, e os serviços de e-mail recusam token expirado, revogado ou de outro usuário.
-- **TLS:** certificado autoassinado para `localhost`, gerado no primeiro uso. Em **Configurações → Certificado TLS** dá para marcá-lo como confiável no seu usuário do Windows.
+- **Segurança da interface:** a API recusa pedidos vindos de outros sites abertos no navegador e, com o acesso pela rede desligado, só atende endereços deste computador. Anexos HTML e SVG de e-mails capturados abrem isolados, sem rodar scripts.
 - **SMTP:** ESMTP com SIZE, 8BITMIME, SMTPUTF8, PIPELINING, CHUNKING (BDAT) e códigos de status estendidos.
 - **IMAP:** IMAP4rev1 com IDLE, UIDPLUS, MOVE, SPECIAL-USE e pastas (Sent, Drafts, Trash, Junk, Archive).
 
@@ -134,6 +148,8 @@ dotnet test                                       # testes de ponta a ponta
 
 ```
 src/FakeServerEmail/
+  Program.cs    ponto de entrada: escolhe o modo (janela, MCP por stdio ou comando de administrador)
+  Hosting/      modo janela: linha de comando, pasta de dados, console e encerramento
   Core/         configurações, armazenamento das mensagens, certificado, log das conexões
   Protocols/    SMTP, POP3, IMAP e SASL, cada um sobre o mesmo serviço TCP
   OAuth/        servidor OAuth 2.0 e emissão/validação dos tokens
@@ -143,6 +159,12 @@ src/FakeServerEmail/
 tests/FakeServerEmail.Tests/  testes com clientes reais (MailKit, MSAL, cliente MCP)
 ```
 
+O build usa os analisadores do .NET no nível `latest-recommended` e trata qualquer aviso como erro. O estilo do código está no `.editorconfig`, e as versões dos pacotes, no `Directory.Packages.props`.
+
 A interface usa [Alpine.js](https://alpinejs.dev/) 3.17.4 (cópia local em `wwwroot/vendor/`, sem CDN) e módulos ES, sem etapa de compilação. Cada tela é um par `views/<tela>.html` + `js/views/<tela>.js`.
 
 A arquitetura e as convenções do projeto estão descritas no [CLAUDE.md](CLAUDE.md).
+
+## Licença
+
+[MIT](LICENSE).

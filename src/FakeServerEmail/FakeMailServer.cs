@@ -11,7 +11,9 @@ using FakeServerEmail.Protocols.Smtp;
 using FakeServerEmail.Web;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.HostFiltering;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -21,16 +23,25 @@ namespace FakeServerEmail;
 
 public sealed class FakeMailServer : IAsyncDisposable
 {
+    public const string McpArgument = "--mcp";
+    private const int MaxWebStartAttempts = 5;
+    private const long MaxRequestBodyBytes = 200L * 1024 * 1024;
+    private const string FallbackHostName = "fakeserver.local";
+    private static readonly TimeSpan PingInterval = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan WebStopTimeout = TimeSpan.FromSeconds(3);
+    private static readonly string[] LocalHostNames = ["localhost", "127.0.0.1", "[::1]"];
+
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Lock _servicesLock = new();
     private readonly Timer _ping;
     private WebApplication? _web;
     private List<TcpService> _services = [];
+    private int _disposed;
 
     private FakeMailServer(ServerContext context)
     {
         Context = context;
-        _ping = new Timer(_ => Events.Publish("ping"), null, TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(20));
+        _ping = new Timer(_ => Events.Publish("ping"), null, PingInterval, PingInterval);
     }
 
     public static string Version => typeof(FakeMailServer).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0] ?? "1.0.0";
@@ -41,7 +52,11 @@ public sealed class FakeMailServer : IAsyncDisposable
 
     public IReadOnlyList<TcpService> Services
     {
-        get { lock (_servicesLock) return [.. _services]; }
+        get
+        {
+            lock (_servicesLock)
+                return [.. _services];
+        }
     }
 
     public int? HttpPort { get; private set; }
@@ -55,6 +70,10 @@ public sealed class FakeMailServer : IAsyncDisposable
     public DateTimeOffset StartedAt { get; } = DateTimeOffset.Now;
 
     public CancellationToken ShutdownToken => _shutdown.Token;
+
+    public bool RemoveDataOnExit { get; set; }
+
+    public IReadOnlyList<string> RemovalFailures { get; private set; } = [];
 
     public static async Task<FakeMailServer> StartAsync(string dataDirectory, Action<AppSettings>? configure = null)
     {
@@ -79,31 +98,38 @@ public sealed class FakeMailServer : IAsyncDisposable
         context.Tokens.Changed += () => server.Events.Publish("tokens");
         settings.Changed += _ => server.Events.Publish("settings");
 
-        server.RestartProtocolServices();
-        await server.StartWebAsync();
+        try
+        {
+            server.RestartProtocolServices();
+            await server.StartWebAsync();
+        }
+        catch
+        {
+            await server.DisposeAsync();
+            throw;
+        }
         return server;
     }
 
     public void RestartProtocolServices()
     {
-        var s = Context.Settings.Current;
-        var cert = Context.Certificates.Certificate;
-        var log = Context.Log;
-        var services = new List<TcpService>
-        {
-            new("SMTP", s.SmtpPort, false, new SmtpHandler(Context, true), cert, log),
-            new("SMTP submissão", s.SmtpSubmissionPort, false, new SmtpHandler(Context, true), cert, log),
-            new("SMTPS", s.SmtpsPort, true, new SmtpHandler(Context, false), cert, log),
-            new("POP3", s.Pop3Port, false, new Pop3Handler(Context, true), cert, log),
-            new("POP3S", s.Pop3sPort, true, new Pop3Handler(Context, false), cert, log),
-            new("IMAP", s.ImapPort, false, new ImapHandler(Context, true), cert, log),
-            new("IMAPS", s.ImapsPort, true, new ImapHandler(Context, false), cert, log),
-        };
-
         lock (_servicesLock)
         {
+            var s = Context.Settings.Current;
+            var cert = Context.Certificates.Certificate;
+            var log = Context.Log;
             foreach (var old in _services)
-                old.Stop();
+                old.Dispose();
+            var services = new List<TcpService>
+            {
+                new("SMTP", s.SmtpPort, false, new SmtpHandler(Context, true), cert, log),
+                new("SMTP submissão", s.SmtpSubmissionPort, false, new SmtpHandler(Context, true), cert, log),
+                new("SMTPS", s.SmtpsPort, true, new SmtpHandler(Context, false), cert, log),
+                new("POP3", s.Pop3Port, false, new Pop3Handler(Context, true), cert, log),
+                new("POP3S", s.Pop3sPort, true, new Pop3Handler(Context, false), cert, log),
+                new("IMAP", s.ImapPort, false, new ImapHandler(Context, true), cert, log),
+                new("IMAPS", s.ImapsPort, true, new ImapHandler(Context, false), cert, log),
+            };
             foreach (var service in services)
                 service.Start(s.AllowNetworkAccess);
             _services = services;
@@ -111,17 +137,130 @@ public sealed class FakeMailServer : IAsyncDisposable
         Events.Publish("status");
     }
 
-    private async Task StartWebAsync(bool enableHttps = true)
+    public ServerStatus Status()
     {
         var s = Context.Settings.Current;
-        HttpPort = FindFreePort(s.HttpPort, s.AllowNetworkAccess);
-        if (HttpPort is null)
-            throw new InvalidOperationException($"Não foi possível abrir a porta da interface web ({s.HttpPort}) nem as alternativas.");
-        HttpsPort = enableHttps && s.HttpsPort > 0 ? FindFreePort(s.HttpsPort, s.AllowNetworkAccess, HttpPort) : null;
+        var baseUrl = Context.HttpsBaseUrl ?? Context.HttpBaseUrl;
+        var firstUser = s.Users.FirstOrDefault();
+        return new ServerStatus(
+            Version,
+            StartedAt,
+            DateTimeOffset.Now,
+            Environment.ProcessPath,
+            new McpStatus($"{Context.HttpBaseUrl}/mcp", Environment.ProcessPath, [McpArgument]),
+            Context.DataDirectory,
+            Context.HostName,
+            s.AllowNetworkAccess,
+            new AuthenticationStatus(
+                s.AcceptAnyPassword,
+                s.SmtpRequireAuth,
+                s.AcceptAnyPassword ? "teste@teste.local" : firstUser?.Username ?? "SEU_USUARIO",
+                s.AcceptAnyPassword ? "qualquer" : firstUser?.Password ?? "SUA_SENHA"),
+            new WebStatus(Context.HttpBaseUrl, Context.HttpsBaseUrl, HttpPort, HttpsPort, s.HttpPort, s.HttpsPort, WebError),
+            Services.Select(x => new ServiceStatus(
+                x.Name,
+                x.Protocol,
+                x.ConfiguredPort,
+                x.ActualPort,
+                x.ImplicitTls ? TlsModes.Implicit : s.OfferStartTls ? TlsModes.StartTls : TlsModes.None,
+                x.Running,
+                x.Error,
+                x.ActiveConnections)).ToList(),
+            new OAuthEndpoints(
+                $"{baseUrl}/.well-known/openid-configuration",
+                $"{baseUrl}/oauth2/authorize",
+                $"{baseUrl}/oauth2/token",
+                $"{baseUrl}/oauth2/devicecode",
+                $"{baseUrl}/oauth2/jwks",
+                $"{baseUrl}/oauth2/userinfo",
+                $"{baseUrl}/fake-tenant/v2.0",
+                $"{baseUrl}/fake-tenant/oauth2/v2.0/token",
+                $"{Context.HttpBaseUrl}/oauth2/token"),
+            CertificateStatus.From(Context.Certificates),
+            Context.Store.Counts());
+    }
 
-        Context.HttpBaseUrl = $"http://localhost:{HttpPort}";
-        Context.HttpsBaseUrl = HttpsPort is null ? null : $"https://localhost:{HttpsPort}";
+    public void RequestShutdown()
+    {
+        try
+        {
+            _shutdown.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
 
+    public async Task WaitForShutdownAsync() =>
+        await Task.Delay(Timeout.Infinite, _shutdown.Token).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+        RequestShutdown();
+        await _ping.DisposeAsync();
+        foreach (var service in Services)
+            service.Dispose();
+        if (_web is not null)
+        {
+            using var cts = new CancellationTokenSource(WebStopTimeout);
+            try
+            {
+                await _web.StopAsync(cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            await _web.DisposeAsync();
+        }
+        Context.Store.Dispose();
+        Context.Tokens.Dispose();
+        Events.Dispose();
+        Context.Certificates.Dispose();
+        _shutdown.Dispose();
+        if (RemoveDataOnExit)
+            RemovalFailures = await DataCleaner.RemoveOwnedDataAsync(Context.DataDirectory);
+    }
+
+    private async Task StartWebAsync()
+    {
+        var s = Context.Settings.Current;
+        var excluded = new HashSet<int>();
+        var httpsEnabled = s.HttpsPort > 0;
+        for (var attempt = 1; ; attempt++)
+        {
+            HttpPort = FindFreePort(s.HttpPort, s.AllowNetworkAccess, excluded)
+                ?? throw new InvalidOperationException($"Não foi possível abrir a porta da interface web ({s.HttpPort}) nem as alternativas.");
+            HttpsPort = httpsEnabled ? FindFreePort(s.HttpsPort, s.AllowNetworkAccess, [.. excluded, HttpPort.Value]) : null;
+            Context.HttpBaseUrl = $"http://localhost:{HttpPort}";
+            Context.HttpsBaseUrl = HttpsPort is null ? null : $"https://localhost:{HttpsPort}";
+
+            var app = BuildWebApplication(s, HttpPort.Value, HttpsPort);
+            try
+            {
+                await app.StartAsync();
+                _web = app;
+                return;
+            }
+            catch (IOException) when (attempt < MaxWebStartAttempts)
+            {
+                await app.DisposeAsync();
+                excluded.Add(HttpPort.Value);
+                if (HttpsPort is int busyHttps)
+                    excluded.Add(busyHttps);
+            }
+            catch (Exception ex) when (httpsEnabled && HttpsPort is not null && ex is not IOException)
+            {
+                await app.DisposeAsync();
+                WebError = "HTTPS desativado: " + ex.Message;
+                httpsEnabled = false;
+            }
+        }
+    }
+
+    private WebApplication BuildWebApplication(AppSettings s, int httpPort, int? httpsPort)
+    {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
             ContentRootPath = Context.DataDirectory,
@@ -130,12 +269,19 @@ public sealed class FakeMailServer : IAsyncDisposable
         });
         builder.Logging.ClearProviders();
         builder.Configuration.Sources.Clear();
+        builder.Services.Configure<HostFilteringOptions>(o =>
+        {
+            o.AllowedHosts = s.AllowNetworkAccess ? ["*"] : LocalHostNames;
+            o.IncludeFailureMessage = false;
+        });
         builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.PropertyNameCaseInsensitive = true);
-        builder.Services.AddFakeMailMcp(new MailApiClient($"http://127.0.0.1:{HttpPort}"))
+        AddSharedServices(builder.Services);
+        builder.Services.AddSingleton<OAuthServer>();
+        builder.Services.AddFakeMailMcp(new MailApiClient($"http://127.0.0.1:{httpPort}"))
             .WithHttpTransport(o => o.SessionMode = HttpServerSessionMode.StatefulForInitializeClients);
         builder.WebHost.ConfigureKestrel(k =>
         {
-            k.Limits.MaxRequestBodySize = 200L * 1024 * 1024;
+            k.Limits.MaxRequestBodySize = MaxRequestBodyBytes;
             void Listen(int port, Action<ListenOptions>? configure)
             {
                 if (s.AllowNetworkAccess)
@@ -144,18 +290,13 @@ public sealed class FakeMailServer : IAsyncDisposable
                     k.ListenLocalhost(port, o => configure?.Invoke(o));
             }
 
-            Listen(HttpPort.Value, null);
-            if (HttpsPort is { } https)
+            Listen(httpPort, null);
+            if (httpsPort is { } https)
                 Listen(https, o => o.UseHttps(Context.Certificates.Certificate));
         });
 
         var app = builder.Build();
-        var oauth = new OAuthServer(Context);
-        app.Use(async (http, next) =>
-        {
-            if (!await oauth.TryHandleAsync(http))
-                await next(http);
-        });
+        app.UseMiddleware<OAuthServer>();
 
         var files = new ManifestEmbeddedFileProvider(typeof(FakeMailServer).Assembly, "wwwroot");
         app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = files });
@@ -164,160 +305,65 @@ public sealed class FakeMailServer : IAsyncDisposable
             FileProvider = files,
             OnPrepareResponse = r => r.Context.Response.Headers.CacheControl = "no-cache",
         });
-        ApiEndpoints.Map(app, this);
+        app.MapFakeMailApi();
         app.MapMcp("/mcp");
-
-        try
-        {
-            await app.StartAsync();
-        }
-        catch (Exception ex) when (HttpsPort is not null)
-        {
-            WebError = "HTTPS desativado: " + ex.Message;
-            await app.DisposeAsync();
-            HttpsPort = null;
-            Context.HttpsBaseUrl = null;
-            await StartWebAsync(false);
-            return;
-        }
-        _web = app;
+        return app;
     }
 
-    public object Status()
+    private void AddSharedServices(IServiceCollection services)
     {
-        var s = Context.Settings.Current;
-        var baseUrl = Context.HttpsBaseUrl ?? Context.HttpBaseUrl;
-        var cert = Context.Certificates.Certificate;
-        var all = Context.Store.List();
-        return new
-        {
-            version = Version,
-            startedAt = StartedAt,
-            serverTime = DateTimeOffset.Now,
-            executablePath = Environment.ProcessPath,
-            mcp = new
-            {
-                http = $"{Context.HttpBaseUrl}/mcp",
-                stdioCommand = Environment.ProcessPath,
-                stdioArgs = new[] { "--mcp" },
-            },
-            dataDirectory = Context.DataDirectory,
-            hostName = Context.HostName,
-            allowNetworkAccess = s.AllowNetworkAccess,
-            authentication = new
-            {
-                acceptAnyPassword = s.AcceptAnyPassword,
-                smtpRequireAuth = s.SmtpRequireAuth,
-                exampleUser = s.AcceptAnyPassword ? "teste@teste.local" : s.Users.FirstOrDefault()?.Username ?? "SEU_USUARIO",
-                examplePassword = s.AcceptAnyPassword ? "qualquer" : s.Users.FirstOrDefault()?.Password ?? "SUA_SENHA",
-            },
-            web = new
-            {
-                http = Context.HttpBaseUrl,
-                https = Context.HttpsBaseUrl,
-                httpPort = HttpPort,
-                httpsPort = HttpsPort,
-                configuredHttpPort = s.HttpPort,
-                configuredHttpsPort = s.HttpsPort,
-                error = WebError,
-            },
-            services = Services.Select(x => new
-            {
-                name = x.Name,
-                protocol = x.Protocol,
-                configuredPort = x.ConfiguredPort,
-                port = x.ActualPort,
-                tls = x.ImplicitTls ? "implicit" : s.OfferStartTls ? "starttls" : "none",
-                running = x.Running,
-                error = x.Error,
-                connections = x.ActiveConnections,
-            }),
-            oauth = new
-            {
-                discovery = $"{baseUrl}/.well-known/openid-configuration",
-                authorize = $"{baseUrl}/oauth2/authorize",
-                token = $"{baseUrl}/oauth2/token",
-                deviceCode = $"{baseUrl}/oauth2/devicecode",
-                jwks = $"{baseUrl}/oauth2/jwks",
-                userinfo = $"{baseUrl}/oauth2/userinfo",
-                microsoftAuthority = $"{baseUrl}/fake-tenant/v2.0",
-                microsoftToken = $"{baseUrl}/fake-tenant/oauth2/v2.0/token",
-                httpToken = $"{Context.HttpBaseUrl}/oauth2/token",
-            },
-            certificate = new
-            {
-                trusted = Context.Certificates.IsTrusted(),
-                thumbprint = cert.Thumbprint,
-                subject = cert.Subject,
-                notAfter = cert.NotAfter,
-            },
-            counts = new
-            {
-                messages = all.Count,
-                unread = all.Count(m => !m.HasFlag(ImapFlags.Seen)),
-            },
-        };
+        services.AddSingleton(this);
+        services.AddSingleton(Context);
+        services.AddSingleton(Context.Settings);
+        services.AddSingleton(Context.Store);
+        services.AddSingleton(Context.Tokens);
+        services.AddSingleton(Context.Log);
+        services.AddSingleton(Context.Certificates);
+        services.AddSingleton(Context.Authenticator);
+        services.AddSingleton(Events);
     }
 
-    public void RequestShutdown() => _shutdown.Cancel();
-
-    public async Task WaitForShutdownAsync()
-    {
-        try
-        {
-            await Task.Delay(Timeout.Infinite, _shutdown.Token);
-        }
-        catch (OperationCanceledException)
-        {
-        }
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        _shutdown.Cancel();
-        await _ping.DisposeAsync();
-        foreach (var service in Services)
-            service.Stop();
-        if (_web is not null)
-        {
-            try
-            {
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-                await _web.StopAsync(cts.Token);
-            }
-            catch
-            {
-            }
-            await _web.DisposeAsync();
-        }
-        Context.Store.Dispose();
-        Events.Dispose();
-        Context.Certificates.Dispose();
-        if (RemoveDataOnExit)
-            RemovalFailures = DataCleaner.RemoveOwnedData(Context.DataDirectory);
-    }
-
-    public bool RemoveDataOnExit { get; set; }
-
-    public IReadOnlyList<string> RemovalFailures { get; private set; } = [];
-
-    private static int? FindFreePort(int configured, bool allowNetwork, int? exclude = null)
+    private static int? FindFreePort(int configured, bool allowNetwork, HashSet<int> excluded)
     {
         foreach (var port in TcpService.CandidatePorts(configured))
         {
-            if (port == exclude)
-                continue;
-            try
-            {
-                using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp) { ExclusiveAddressUse = true };
-                socket.Bind(new IPEndPoint(allowNetwork ? IPAddress.Any : IPAddress.Loopback, port));
+            if (!excluded.Contains(port) && IsFree(port, allowNetwork))
                 return port;
-            }
-            catch (SocketException)
-            {
-            }
         }
         return null;
+    }
+
+    private static bool IsFree(int port, bool allowNetwork)
+    {
+        try
+        {
+            if (allowNetwork)
+            {
+                using var any = Socket.OSSupportsIPv6
+                    ? new Socket(AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp) { DualMode = true, ExclusiveAddressUse = true }
+                    : new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp) { ExclusiveAddressUse = true };
+                any.Bind(new IPEndPoint(Socket.OSSupportsIPv6 ? IPAddress.IPv6Any : IPAddress.Any, port));
+                return true;
+            }
+
+            using var v4 = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp) { ExclusiveAddressUse = true };
+            v4.Bind(new IPEndPoint(IPAddress.Loopback, port));
+            if (!Socket.OSSupportsIPv6)
+                return true;
+            using var v6 = new Socket(AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp) { ExclusiveAddressUse = true };
+            try
+            {
+                v6.Bind(new IPEndPoint(IPAddress.IPv6Loopback, port));
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode is not (SocketError.AddressAlreadyInUse or SocketError.AccessDenied))
+            {
+            }
+            return true;
+        }
+        catch (SocketException)
+        {
+            return false;
+        }
     }
 
     private static string SafeHostName()
@@ -325,11 +371,11 @@ public sealed class FakeMailServer : IAsyncDisposable
         try
         {
             var name = Dns.GetHostName().ToLowerInvariant();
-            return string.IsNullOrWhiteSpace(name) ? "fakeserver.local" : name;
+            return string.IsNullOrWhiteSpace(name) ? FallbackHostName : name;
         }
-        catch
+        catch (SocketException)
         {
-            return "fakeserver.local";
+            return FallbackHostName;
         }
     }
 }

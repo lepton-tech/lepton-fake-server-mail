@@ -2,7 +2,7 @@ using System.Text;
 
 namespace FakeServerEmail.Protocols.Imap;
 
-public static class ImapUtf7
+internal static class ImapUtf7
 {
     public static string Encode(string value)
     {

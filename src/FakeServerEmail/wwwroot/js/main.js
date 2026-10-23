@@ -17,21 +17,36 @@ async function includePartials() {
   }));
 }
 
-await includePartials();
+function showLoadError() {
+  const message = document.createElement("p");
+  message.className = "load-error";
+  message.textContent = "Não foi possível carregar a tela do Fake Server Email. Feche o programa, abra de novo e recarregue esta página.";
+  document.body.replaceChildren(message);
+}
 
-Alpine.store("app", createAppStore());
-Alpine.data("inbox", inbox);
-Alpine.data("sessions", sessions);
-Alpine.data("oauth", oauth);
-Alpine.data("connect", connect);
-Alpine.data("settings", settings);
-Alpine.data("sendDialog", sendDialog);
+async function start() {
+  try {
+    await includePartials();
+  } catch {
+    showLoadError();
+    return;
+  }
 
-window.Alpine = Alpine;
-Alpine.start();
+  Alpine.store("app", createAppStore());
+  Alpine.data("inbox", inbox);
+  Alpine.data("sessions", sessions);
+  Alpine.data("oauth", oauth);
+  Alpine.data("connect", connect);
+  Alpine.data("settings", settings);
+  Alpine.data("sendDialog", sendDialog);
 
-Alpine.effect(() => {
-  document.title = Alpine.store("app").title;
-});
+  window.Alpine = Alpine;
+  connectEvents(() => Boolean(Alpine.store("app").stopped));
+  Alpine.start();
 
-connectEvents(() => Boolean(Alpine.store("app").stopped));
+  Alpine.effect(() => {
+    document.title = Alpine.store("app").title;
+  });
+}
+
+start();

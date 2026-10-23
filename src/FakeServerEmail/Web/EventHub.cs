@@ -1,9 +1,13 @@
+using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 
 namespace FakeServerEmail.Web;
 
 public sealed class EventHub : IDisposable
 {
+    private const int SubscriberCapacity = 100;
+    private static readonly TimeSpan DispatchInterval = TimeSpan.FromMilliseconds(300);
+
     private readonly Lock _lock = new();
     private readonly List<Channel<string>> _subscribers = [];
     private readonly HashSet<string> _pending = [];
@@ -11,7 +15,7 @@ public sealed class EventHub : IDisposable
 
     public EventHub()
     {
-        _timer = new Timer(_ => Dispatch(), null, 300, 300);
+        _timer = new Timer(_ => Dispatch(), null, DispatchInterval, DispatchInterval);
     }
 
     public void Publish(string name)
@@ -20,19 +24,24 @@ public sealed class EventHub : IDisposable
             _pending.Add(name);
     }
 
-    public ChannelReader<string> Subscribe(CancellationToken ct)
+    public async IAsyncEnumerable<string> ListenAsync([EnumeratorCancellation] CancellationToken ct)
     {
-        var channel = Channel.CreateBounded<string>(new BoundedChannelOptions(100) { FullMode = BoundedChannelFullMode.DropOldest });
+        var channel = Channel.CreateBounded<string>(new BoundedChannelOptions(SubscriberCapacity) { FullMode = BoundedChannelFullMode.DropOldest, SingleReader = true });
         lock (_lock)
             _subscribers.Add(channel);
-        ct.Register(() =>
+        try
+        {
+            await foreach (var name in channel.Reader.ReadAllAsync(ct))
+                yield return name;
+        }
+        finally
         {
             lock (_lock)
                 _subscribers.Remove(channel);
-            channel.Writer.TryComplete();
-        });
-        return channel.Reader;
+        }
     }
+
+    public void Dispose() => _timer.Dispose();
 
     private void Dispatch()
     {
@@ -50,6 +59,4 @@ public sealed class EventHub : IDisposable
             foreach (var n in names)
                 s.Writer.TryWrite(n);
     }
-
-    public void Dispose() => _timer.Dispose();
 }

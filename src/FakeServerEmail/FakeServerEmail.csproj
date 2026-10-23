@@ -2,13 +2,12 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>FakeServerEmail</AssemblyName>
     <RootNamespace>FakeServerEmail</RootNamespace>
     <Version>1.0.0</Version>
     <Product>Fake Server Email</Product>
+    <Authors>Ramona Cardoso de Oliveira</Authors>
+    <Copyright>Copyright (c) 2026 Ramona Cardoso de Oliveira</Copyright>
     <Description>Servidor de e-mail falso (SMTP, POP3, IMAP e OAuth 2.0) para testes locais</Description>
     <ApplicationIcon>app.ico</ApplicationIcon>
     <InvariantGlobalization>false</InvariantGlobalization>
@@ -35,14 +34,20 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="MailKit" Version="4.18.1" />
-    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
-    <PackageReference Include="Microsoft.Extensions.FileProviders.Embedded" Version="10.0.*" />
-    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
+    <PackageReference Include="MailKit" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" />
+    <PackageReference Include="Microsoft.Extensions.FileProviders.Embedded" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" />
   </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="FakeServerEmail.Tests" />
   </ItemGroup>
+
+  <Target Name="ExcludeIisModuleFromPublish" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(Filename)%(Extension)' == 'aspnetcorev2_inprocess.dll'" />
+    </ItemGroup>
+  </Target>
 
 </Project>

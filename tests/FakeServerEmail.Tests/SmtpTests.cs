@@ -1,4 +1,3 @@
-using System.Net.Sockets;
 using System.Text;
 using MailKit.Net.Smtp;
 using MailKit.Security;
@@ -14,7 +13,7 @@ public sealed class SmtpTests(ServerFixture fx)
     public async Task Envio_sem_autenticacao_e_armazenado_com_envelope()
     {
         var subject = "smtp-simples-" + Guid.NewGuid();
-        await fx.SendAsync(ServerFixture.Simple(subject, to: "alguem@teste.local"));
+        await fx.SendAsync(ServerFixture.Simple(subject, to: "alguem@teste.local"), _ct);
 
         var stored = fx.Server.Context.Store.List().Single(m => m.Subject == subject);
         Assert.Equal("origem@teste.local", stored.EnvelopeFrom);
@@ -29,7 +28,7 @@ public sealed class SmtpTests(ServerFixture fx)
     public async Task StartTls_com_AUTH_PLAIN_registra_usuario()
     {
         var subject = "smtp-starttls-" + Guid.NewGuid();
-        using var client = new SmtpClient { ServerCertificateValidationCallback = (_, _, _, _) => true };
+        using var client = new SmtpClient { ServerCertificateValidationCallback = fx.IsServerCertificate };
         await client.ConnectAsync("127.0.0.1", fx.Smtp, SecureSocketOptions.StartTls, _ct);
         Assert.True(client.IsSecure);
         Assert.Contains("PLAIN", client.AuthenticationMechanisms);
@@ -46,7 +45,7 @@ public sealed class SmtpTests(ServerFixture fx)
     public async Task Smtps_com_TLS_implicito_e_AUTH_LOGIN()
     {
         var subject = "smtps-" + Guid.NewGuid();
-        using var client = new SmtpClient { ServerCertificateValidationCallback = (_, _, _, _) => true };
+        using var client = new SmtpClient { ServerCertificateValidationCallback = fx.IsServerCertificate };
         await client.ConnectAsync("127.0.0.1", fx.Smtps, SecureSocketOptions.SslOnConnect, _ct);
         client.AuthenticationMechanisms.Remove("PLAIN");
         await client.AuthenticateAsync("login@teste.local", "x", _ct);
@@ -62,118 +61,69 @@ public sealed class SmtpTests(ServerFixture fx)
     public async Task Dot_stuffing_e_pipelining_em_socket_cru()
     {
         var subject = "smtp-cru-" + Guid.NewGuid();
-        using var tcp = new TcpClient();
-        await tcp.ConnectAsync("127.0.0.1", fx.Smtp, _ct);
-        var stream = tcp.GetStream();
-        var reader = new StreamReader(stream, Encoding.ASCII);
-
-        async Task<string> ReadReplyAsync()
-        {
-            var sb = new StringBuilder();
-            while (true)
-            {
-                var line = await reader.ReadLineAsync(_ct) ?? throw new IOException("conexão fechada");
-                sb.AppendLine(line);
-                if (line.Length < 4 || line[3] != '-')
-                    return sb.ToString();
-            }
-        }
-
-        Assert.StartsWith("220", await ReadReplyAsync());
-        var pipelined = "EHLO cliente\r\nMAIL FROM:<a@teste.local>\r\nRCPT TO:<b@teste.local>\r\nRCPT TO:<c@teste.local>\r\nDATA\r\n";
-        await stream.WriteAsync(Encoding.ASCII.GetBytes(pipelined), _ct);
-        Assert.Contains("250 HELP", await ReadReplyAsync());
-        Assert.StartsWith("250", await ReadReplyAsync());
-        Assert.StartsWith("250", await ReadReplyAsync());
-        Assert.StartsWith("250", await ReadReplyAsync());
-        Assert.StartsWith("354", await ReadReplyAsync());
-        var body = $"Subject: {subject}\r\n\r\nlinha normal\r\n..linha com ponto\r\n.\r\nQUIT\r\n";
-        await stream.WriteAsync(Encoding.ASCII.GetBytes(body), _ct);
-        Assert.StartsWith("250", await ReadReplyAsync());
-        Assert.StartsWith("221", await ReadReplyAsync());
+        await using var smtp = await RawLineClient.ConnectAsync(fx.Smtp, _ct);
+        Assert.StartsWith("220", await smtp.ReadSmtpReplyAsync(), StringComparison.Ordinal);
+        await smtp.WriteAsync("EHLO cliente\r\nMAIL FROM:<a@teste.local>\r\nRCPT TO:<b@teste.local>\r\nRCPT TO:<c@teste.local>\r\nDATA\r\n");
+        Assert.Contains("250 HELP", await smtp.ReadSmtpReplyAsync(), StringComparison.Ordinal);
+        Assert.StartsWith("250", await smtp.ReadSmtpReplyAsync(), StringComparison.Ordinal);
+        Assert.StartsWith("250", await smtp.ReadSmtpReplyAsync(), StringComparison.Ordinal);
+        Assert.StartsWith("250", await smtp.ReadSmtpReplyAsync(), StringComparison.Ordinal);
+        Assert.StartsWith("354", await smtp.ReadSmtpReplyAsync(), StringComparison.Ordinal);
+        await smtp.WriteAsync($"Subject: {subject}\r\n\r\nlinha normal\r\n..linha com ponto\r\n.\r\nQUIT\r\n");
+        Assert.StartsWith("250", await smtp.ReadSmtpReplyAsync(), StringComparison.Ordinal);
+        Assert.StartsWith("221", await smtp.ReadSmtpReplyAsync(), StringComparison.Ordinal);
 
         var stored = fx.Server.Context.Store.List().Single(m => m.Subject == subject);
         Assert.Equal(["b@teste.local", "c@teste.local"], stored.EnvelopeTo);
         var raw = Encoding.ASCII.GetString(fx.Server.Context.Store.GetRaw(stored.Id)!);
-        Assert.Contains("\r\n.linha com ponto\r\n", raw);
-        Assert.DoesNotContain("..linha", raw);
+        Assert.Contains("\r\n.linha com ponto\r\n", raw, StringComparison.Ordinal);
+        Assert.DoesNotContain("..linha", raw, StringComparison.Ordinal);
     }
 
     [Fact]
     public async Task Comando_invalido_e_sequencia_errada_retornam_erros_corretos()
     {
-        using var tcp = new TcpClient();
-        await tcp.ConnectAsync("127.0.0.1", fx.Smtp, _ct);
-        var stream = tcp.GetStream();
-        var reader = new StreamReader(stream, Encoding.ASCII);
-        var writer = new StreamWriter(stream, Encoding.ASCII) { NewLine = "\r\n", AutoFlush = true };
-        await reader.ReadLineAsync(_ct);
-
-        await writer.WriteLineAsync("XPTO");
-        Assert.StartsWith("500", await reader.ReadLineAsync(_ct));
-        await writer.WriteLineAsync("RCPT TO:<x@y>");
-        Assert.StartsWith("503", await reader.ReadLineAsync(_ct));
-        await writer.WriteLineAsync("AUTH CRAM-MD5");
-        Assert.StartsWith("504", await reader.ReadLineAsync(_ct));
-        await writer.WriteLineAsync("QUIT");
-        Assert.StartsWith("221", await reader.ReadLineAsync(_ct));
+        await using var smtp = await RawLineClient.ConnectAsync(fx.Smtp, _ct);
+        await smtp.ReadSmtpReplyAsync();
+        Assert.StartsWith("500", await smtp.SmtpAsync("XPTO"), StringComparison.Ordinal);
+        Assert.StartsWith("503", await smtp.SmtpAsync("RCPT TO:<x@y>"), StringComparison.Ordinal);
+        Assert.StartsWith("504", await smtp.SmtpAsync("AUTH CRAM-MD5"), StringComparison.Ordinal);
+        Assert.StartsWith("221", await smtp.SmtpAsync("QUIT"), StringComparison.Ordinal);
     }
 
     [Fact]
     public async Task Sem_STARTTLS_e_so_PLAIN_quando_configurado()
     {
-        var settings = fx.Server.Context.Settings;
-        var original = settings.Current.Clone();
-        try
+        using var settings = fx.OverrideSettings(s =>
         {
-            var changed = original.Clone();
-            changed.OfferStartTls = false;
-            changed.AuthMechanisms = ["plain"];
-            settings.Update(changed);
+            s.OfferStartTls = false;
+            s.AuthMechanisms = ["plain"];
+        });
 
-            using (var strict = new SmtpClient())
-                await Assert.ThrowsAsync<NotSupportedException>(() => strict.ConnectAsync("127.0.0.1", fx.Smtp, SecureSocketOptions.StartTls, _ct));
+        using (var strict = new SmtpClient())
+            await Assert.ThrowsAsync<NotSupportedException>(() => strict.ConnectAsync("127.0.0.1", fx.Smtp, SecureSocketOptions.StartTls, _ct));
 
-            var subject = "smtp-so-plain-" + Guid.NewGuid();
-            using (var client = new SmtpClient())
-            {
-                await client.ConnectAsync("127.0.0.1", fx.Smtp, SecureSocketOptions.StartTlsWhenAvailable, _ct);
-                Assert.False(client.IsSecure);
-                Assert.Equal("PLAIN", Assert.Single(client.AuthenticationMechanisms));
-                await client.AuthenticateAsync("plain@teste.local", "x", _ct);
-                await client.SendAsync(ServerFixture.Simple(subject), _ct);
-                await client.DisconnectAsync(true, _ct);
-            }
-            Assert.Equal("plain@teste.local", fx.Server.Context.Store.List().Single(m => m.Subject == subject).AuthenticatedUser);
-
-            using var tcp = new TcpClient();
-            await tcp.ConnectAsync("127.0.0.1", fx.Smtp, _ct);
-            var stream = tcp.GetStream();
-            var reader = new StreamReader(stream, Encoding.ASCII);
-            var writer = new StreamWriter(stream, Encoding.ASCII) { NewLine = "\r\n", AutoFlush = true };
-            await reader.ReadLineAsync(_ct);
-            await writer.WriteLineAsync("STARTTLS");
-            Assert.StartsWith("502", await reader.ReadLineAsync(_ct));
-            await writer.WriteLineAsync("AUTH LOGIN");
-            Assert.StartsWith("504", await reader.ReadLineAsync(_ct));
-
-            changed.AuthMechanisms = [];
-            settings.Update(changed);
-            await writer.WriteLineAsync("EHLO cliente");
-            var ehlo = new List<string>();
-            string? line;
-            do
-            {
-                line = await reader.ReadLineAsync(_ct) ?? throw new IOException("conexão fechada");
-                ehlo.Add(line);
-            } while (line.StartsWith("250-"));
-            Assert.DoesNotContain(ehlo, l => l.Contains("AUTH") || l.Contains("STARTTLS"));
-            await writer.WriteLineAsync("AUTH PLAIN");
-            Assert.StartsWith("504", await reader.ReadLineAsync(_ct));
-        }
-        finally
+        var subject = "smtp-so-plain-" + Guid.NewGuid();
+        using (var client = new SmtpClient())
         {
-            settings.Update(original);
+            await client.ConnectAsync("127.0.0.1", fx.Smtp, SecureSocketOptions.StartTlsWhenAvailable, _ct);
+            Assert.False(client.IsSecure);
+            Assert.Equal("PLAIN", Assert.Single(client.AuthenticationMechanisms));
+            await client.AuthenticateAsync("plain@teste.local", "x", _ct);
+            await client.SendAsync(ServerFixture.Simple(subject), _ct);
+            await client.DisconnectAsync(true, _ct);
         }
+        Assert.Equal("plain@teste.local", fx.Server.Context.Store.List().Single(m => m.Subject == subject).AuthenticatedUser);
+
+        await using var smtp = await RawLineClient.ConnectAsync(fx.Smtp, _ct);
+        await smtp.ReadSmtpReplyAsync();
+        Assert.StartsWith("502", await smtp.SmtpAsync("STARTTLS"), StringComparison.Ordinal);
+        Assert.StartsWith("504", await smtp.SmtpAsync("AUTH LOGIN"), StringComparison.Ordinal);
+
+        settings.Apply(s => s.AuthMechanisms = []);
+        var ehlo = await smtp.SmtpAsync("EHLO cliente");
+        Assert.DoesNotContain("AUTH", ehlo, StringComparison.Ordinal);
+        Assert.DoesNotContain("STARTTLS", ehlo, StringComparison.Ordinal);
+        Assert.StartsWith("504", await smtp.SmtpAsync("AUTH PLAIN"), StringComparison.Ordinal);
     }
 }

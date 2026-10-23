@@ -1,5 +1,7 @@
 import { buildSnippets, MCP_TOOLS } from "./connect-snippets.js";
 
+const built = new WeakMap();
+
 export default () => ({
   active: {},
   tools: MCP_TOOLS,
@@ -36,7 +38,10 @@ export default () => ({
   },
 
   get snippets() {
-    return this.ctx ? buildSnippets(this.ctx) : {};
+    const st = this.status;
+    if (!st) return {};
+    if (!built.has(st)) built.set(st, buildSnippets(this.ctx));
+    return built.get(st);
   },
 
   langs(group) {

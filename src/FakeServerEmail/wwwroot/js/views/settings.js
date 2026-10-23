@@ -51,12 +51,47 @@ export default () => ({
   off: {},
   userRows: [],
   message: "",
+  saved: "",
+  saving: false,
+  externalChange: false,
+  trustBusy: false,
 
   fmtDate,
 
   init() {
-    this.$watch("$store.app.view", (view) => view === "settings" && this.load());
-    if (this.$store.app.view === "settings") this.load();
+    this.$watch("$store.app.view", () => this.active() && this.enter());
+    window.addEventListener("fse-settings", () => this.changedElsewhere());
+    if (this.active()) this.enter();
+  },
+
+  active() {
+    return this.$store.app.view === "settings";
+  },
+
+  snapshot() {
+    return JSON.stringify([this.model, this.userRows.map((u) => [u.username, u.password]), this.off]);
+  },
+
+  get dirty() {
+    return this.model !== null && this.snapshot() !== this.saved;
+  },
+
+  async enter() {
+    if (!this.dirty) await this.$store.app.run(() => this.load());
+    const anchor = this.$store.app.anchor;
+    if (!anchor) return;
+    this.$store.app.anchor = null;
+    this.$nextTick(() => document.getElementById(anchor)?.scrollIntoView({ block: "start" }));
+  },
+
+  changedElsewhere() {
+    if (this.saving || this.model === null) return;
+    if (this.dirty) this.externalChange = true;
+    else if (this.active()) this.$store.app.run(() => this.load(true));
+  },
+
+  discard() {
+    return this.$store.app.run(() => this.load());
   },
 
   get info() {
@@ -93,24 +128,21 @@ export default () => ({
 
   addUser() {
     this.userRows.push(row());
-    this.$nextTick(() => [...this.$root.querySelectorAll('.users input[aria-label="Usuário"]')].pop()?.focus());
+    this.$nextTick(() => [...this.$root.querySelectorAll(".users input.user-name")].pop()?.focus());
   },
 
   removeUser(id) {
     this.userRows = this.userRows.filter((u) => u.id !== id);
   },
 
-  async load() {
+  async load(keepMessage = false) {
     const s = await api("/api/settings");
-    this.userRows = (s.users || []).map((u) => row(u.username, u.password));
+    this.userRows = (s.users ?? []).map((u) => row(u.username, u.password));
     this.off = Object.fromEntries(PORTS.map((p) => [p.key, !p.required && !(s[p.key] > 0)]));
     this.model = s;
-    this.message = "";
-    const anchor = this.$store.app.anchor;
-    if (anchor) {
-      this.$store.app.anchor = null;
-      this.$nextTick(() => document.getElementById(anchor)?.scrollIntoView({ block: "start" }));
-    }
+    this.saved = this.snapshot();
+    this.externalChange = false;
+    if (!keepMessage) this.message = "";
   },
 
   async save() {
@@ -133,64 +165,76 @@ export default () => ({
     }
     settings.tokenLifetimeSeconds = parseInt(settings.tokenLifetimeSeconds || "0", 10);
     settings.maxMessageSizeMb = parseInt(settings.maxMessageSizeMb || "0", 10);
-    try {
+    this.saving = true;
+    await this.$store.app.run(async () => {
       const result = await api("/api/settings", { method: "PUT", json: settings });
       let msg = "Configurações salvas.";
       if (result.servicesRestarted) msg += " Serviços reiniciados com as novas portas.";
       if (result.restartRequired) msg += " Feche e abra o aplicativo para aplicar as portas da interface web.";
       this.message = msg;
       this.$store.app.notify("Configurações salvas");
-      this.$store.app.loadStatus();
-    } catch (err) {
-      this.$store.app.notify(err.message, true);
-    }
+      if (result.status) this.$store.app.setStatus(result.status);
+      await this.load(true);
+    });
+    this.saving = false;
   },
 
-  async setTrust(trust) {
+  async setTrust(trust, scope) {
+    const messages = {
+      "true-user": "Certificado marcado como confiável para o seu usuário",
+      "true-computer": "Certificado marcado como confiável para todo o computador",
+      "false-user": "Confiança removida do seu usuário",
+      "false-computer": "Confiança removida do computador",
+    };
+    this.trustBusy = true;
     try {
-      await api("/api/certificate/" + (trust ? "trust" : "untrust"), { method: "POST" });
-      this.$store.app.notify(trust ? "Certificado marcado como confiável" : "Confiança removida");
-    } catch (err) {
-      this.$store.app.notify(err.message, true);
+      await this.$store.app.run(
+        () => api(`/api/certificate/${trust ? "trust" : "untrust"}?scope=${scope}`, { method: "POST" }),
+        messages[`${trust}-${scope}`],
+      );
+    } finally {
+      this.trustBusy = false;
+      this.$store.app.loadStatus();
     }
-    this.$store.app.loadStatus();
   },
 
   openFolder() {
-    return api("/api/open-data-folder", { method: "POST" });
+    return this.$store.app.run(() => api("/api/open-data-folder", { method: "POST" }));
   },
 
-  async clearData() {
+  clearData() {
     if (!confirm("Apagar todos os e-mails, pastas criadas, tokens OAuth e o log de conexões? As configurações serão mantidas.")) return;
-    try {
+    return this.$store.app.run(async () => {
       const r = await api("/api/data/clear", { method: "POST" });
       this.$store.app.notify(`Dados limpos: ${r.messagesDeleted} e-mails e ${r.tokensDeleted} tokens apagados`);
-    } catch (err) {
-      this.$store.app.notify(err.message, true);
-    }
+    });
   },
 
-  async removeData() {
-    const trusted = this.$store.app.status?.certificate?.trusted;
+  removeData() {
+    const scope = this.$store.app.status?.certificate?.trustScope;
+    const trustNote = {
+      user: "\n\nO certificado também sai da lista de confiáveis do seu usuário; o Windows vai pedir uma confirmação.",
+      computer: "\n\nO certificado também sai da lista de confiáveis do computador; o Windows vai pedir permissão de administrador.",
+    }[scope] ?? "";
     const text = `Remover os dados deste computador?\n\nSerá apagado tudo o que o Fake Server Email gravou em:\n${this.dataDirectory}\n\n(e-mails, tokens, configurações, chave do OAuth e certificado)` +
-      (trusted ? "\n\nO certificado também sai da lista de confiáveis do Windows; o Windows vai pedir uma confirmação." : "") +
+      trustNote +
       "\n\nO programa será fechado. Não dá para desfazer.";
     if (!confirm(text)) return;
-    try {
+    return this.$store.app.run(async () => {
       const r = await api("/api/data/remove", { method: "POST" });
       this.$store.app.stop("Dados removidos", "Tudo o que o programa gravou foi apagado e o servidor foi fechado.", {
         path: r.dataDirectory,
         warning: r.warning,
         hint: "Se não for mais usar, basta apagar o FakeServerEmail.exe. Se abrir de novo, ele começa do zero.",
       });
-    } catch (err) {
-      this.$store.app.notify(err.message, true);
-    }
+    });
   },
 
-  async shutdown() {
+  shutdown() {
     if (!confirm("Encerrar o Fake Server Email? Os serviços SMTP, POP3, IMAP e OAuth vão parar.")) return;
-    await api("/api/shutdown", { method: "POST" });
-    this.$store.app.stop("Servidor encerrado", "Abra o FakeServerEmail.exe novamente para voltar a usar.");
+    return this.$store.app.run(async () => {
+      await api("/api/shutdown", { method: "POST" });
+      this.$store.app.stop("Servidor encerrado", "Abra o FakeServerEmail.exe novamente para voltar a usar.");
+    });
   },
 });

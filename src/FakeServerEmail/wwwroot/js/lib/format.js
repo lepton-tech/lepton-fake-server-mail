@@ -1,28 +1,33 @@
 const dateFmt = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "medium" });
 const timeFmt = new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const dayFmt = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short" });
+const decimalFmt = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false });
+
+const toDate = (value) => {
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
 
 export function fmtDate(value) {
-  if (!value) return "";
-  const d = new Date(value);
-  return isNaN(d) ? "" : dateFmt.format(d);
+  const d = value ? toDate(value) : null;
+  return d ? dateFmt.format(d) : "";
 }
 
 export function fmtTime(value) {
-  const d = new Date(value);
-  return isNaN(d) ? "" : timeFmt.format(d);
+  const d = toDate(value);
+  return d ? timeFmt.format(d) : "";
 }
 
 export function fmtShort(value) {
-  const d = new Date(value);
-  if (isNaN(d)) return "";
+  const d = toDate(value);
+  if (!d) return "";
   return d.toDateString() === new Date().toDateString() ? timeFmt.format(d) : dayFmt.format(d) + " " + timeFmt.format(d).slice(0, 5);
 }
 
 export function fmtSize(n) {
   if (n < 1024) return n + " B";
-  if (n < 1024 * 1024) return (n / 1024).toFixed(1).replace(".", ",") + " KB";
-  return (n / 1024 / 1024).toFixed(1).replace(".", ",") + " MB";
+  if (n < 1024 * 1024) return decimalFmt.format(n / 1024) + " KB";
+  return decimalFmt.format(n / 1024 / 1024) + " MB";
 }
 
 export function displayAddress(text) {
@@ -33,7 +38,7 @@ export function displayAddress(text) {
 }
 
 export function isSeen(message) {
-  return (message?.flags || []).some((f) => f.toLowerCase() === "\\seen");
+  return (message?.flags ?? []).some((f) => f.toLowerCase() === "\\seen");
 }
 
 export function plural(count, one, many) {

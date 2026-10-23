@@ -10,7 +10,7 @@
             <option>IMAP</option>
           </select>
           <span class="spacer"></span>
-          <button class="ghost icon" title="Atualizar" aria-label="Atualizar lista de conexões" @click="load()">
+          <button class="ghost icon" title="Atualizar" aria-label="Atualizar lista de conexões" @click="refresh()">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20v-4h-4"/></svg>
           </button>
           <button class="ghost danger" @click="clear()">Limpar</button>
@@ -18,19 +18,23 @@
       </div>
       <ul class="items" id="session-list">
         <template x-for="s in filtered" :key="s.id">
-          <li :data-session="s.id" :class="{ selected: s.id === selectedId }" @click="open(s.id)">
+          <li :data-session="s.id" tabindex="0" :aria-current="s.id === selectedId" :class="{ selected: s.id === selectedId }" @click="open(s.id)" @keydown.enter.prevent="open(s.id)" @keydown.space.prevent="open(s.id)">
             <span class="who" x-text="s.client"></span>
             <span class="when" x-text="fmtShort(s.startedAt)"></span>
             <span class="meta">
               <template x-for="tag in tags(s)" :key="tag.text">
                 <span class="tag" :class="tag.cls" x-text="tag.text"></span>
               </template>
-              <span x-text="s.lineCount + ' linhas'"></span>
+              <span x-text="lineCount(s)"></span>
             </span>
           </li>
         </template>
       </ul>
-      <div class="empty" x-show="filtered.length === 0"><p>Nenhuma conexão registrada ainda.</p></div>
+      <div class="empty" x-show="sessions.length === 0"><p>Nenhuma conexão registrada ainda.</p></div>
+      <div class="empty" x-show="sessions.length > 0 && filtered.length === 0">
+        <p>Nenhuma conexão <span x-text="protocol"></span> registrada ainda.</p>
+        <p>Escolha <b>Todos os protocolos</b> para ver as outras conexões.</p>
+      </div>
     </aside>
 
     <article class="reader">
