@@ -191,7 +191,12 @@ static void PrintBanner(FakeMailServer server)
     Console.WriteLine($"  {"OAuth 2.0",-17} {context.OpenIdConfigurationUrl}");
     Console.WriteLine($"  {"MCP (agentes)",-17} {context.HttpBaseUrl}/mcp  ou  FakeServerEmail.exe --mcp");
     Console.WriteLine();
-    Console.WriteLine(settings.AcceptAnyPassword ? "  Qualquer usuário e senha são aceitos." : "  Somente os usuários cadastrados são aceitos.");
+    var firstUser = settings.Users.FirstOrDefault();
+    Console.WriteLine(settings.AcceptAnyPassword ? "  Qualquer usuário e senha são aceitos."
+        : firstUser is null ? "  Somente os usuários cadastrados são aceitos."
+        : $"  Somente os usuários cadastrados são aceitos, por exemplo {firstUser.Username} com a senha {firstUser.Password}.");
+    if (settings.SmtpRequireAuth)
+        Console.WriteLine("  O SMTP exige login para enviar.");
     Console.WriteLine("  Dados em: " + context.DataDirectory);
     Console.ForegroundColor = ConsoleColor.DarkGray;
     Console.WriteLine("  Feche esta janela (ou pressione Ctrl+C) para encerrar.");

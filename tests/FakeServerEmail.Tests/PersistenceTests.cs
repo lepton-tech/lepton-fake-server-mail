@@ -42,6 +42,7 @@ public sealed class PersistenceTests
 
             using var client = new SmtpClient();
             await client.ConnectAsync("127.0.0.1", first.Services.Single(s => s.Name == "SMTP").ActualPort!.Value, SecureSocketOptions.None, _ct);
+            await client.AuthenticateAsync("teste@teste.local", "teste", _ct);
             await client.SendAsync(ServerFixture.Simple("persistente"), _ct);
             await client.DisconnectAsync(true, _ct);
             id = first.Context.Store.List().Single().Id;
@@ -77,6 +78,56 @@ public sealed class PersistenceTests
 
             File.WriteAllText(Path.Combine(data, "settings.json"), """{ "authMechanisms": ["xoauth2", "CRAM-MD5", "plain", "PLAIN"] }""");
             Assert.Equal(["PLAIN", "XOAUTH2"], new Core.SettingsStore(data).Current.AuthMechanisms);
+        }
+        finally
+        {
+            try { Directory.Delete(data, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task Padrao_exige_login_com_o_usuario_teste_cadastrado()
+    {
+        var data = Path.Combine(Path.GetTempPath(), "fse-padrao-" + Guid.NewGuid().ToString("N"));
+        var smtpPort = ServerFixture.FreePort();
+        var httpPort = ServerFixture.FreePort();
+        try
+        {
+            await using (var server = await FakeMailServer.StartAsync(data, s =>
+            {
+                s.SmtpPort = smtpPort;
+                s.SmtpSubmissionPort = 0;
+                s.SmtpsPort = 0;
+                s.Pop3Port = 0;
+                s.Pop3sPort = 0;
+                s.ImapPort = 0;
+                s.ImapsPort = 0;
+                s.HttpPort = httpPort;
+                s.HttpsPort = 0;
+                s.OpenBrowserOnStart = false;
+            }))
+            {
+                var settings = server.Context.Settings.Current;
+                Assert.False(settings.AcceptAnyPassword);
+                Assert.True(settings.SmtpRequireAuth);
+                var user = Assert.Single(settings.Users);
+                Assert.Equal(("teste@teste.local", "teste"), (user.Username, user.Password));
+
+                using var client = new SmtpClient();
+                await client.ConnectAsync("127.0.0.1", smtpPort, SecureSocketOptions.None, _ct);
+                var refused = await Assert.ThrowsAsync<MailKit.ServiceNotAuthenticatedException>(() => client.SendAsync(ServerFixture.Simple("sem login"), _ct));
+                Assert.Contains("Autenticação obrigatória", refused.Message);
+                await Assert.ThrowsAsync<AuthenticationException>(() => client.AuthenticateAsync("teste@teste.local", "errada", _ct));
+                await client.AuthenticateAsync("teste@teste.local", "teste", _ct);
+                await client.SendAsync(ServerFixture.Simple("com login"), _ct);
+                await client.DisconnectAsync(true, _ct);
+                Assert.Equal("teste@teste.local", server.Context.Store.List().Single().AuthenticatedUser);
+            }
+
+            File.WriteAllText(Path.Combine(data, "settings.json"), """{ "acceptAnyPassword": true, "users": [] }""");
+            var chosen = new Core.SettingsStore(data).Current;
+            Assert.True(chosen.AcceptAnyPassword);
+            Assert.Empty(chosen.Users);
         }
         finally
         {

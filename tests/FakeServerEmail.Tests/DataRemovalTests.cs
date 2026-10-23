@@ -34,6 +34,7 @@ public sealed class DataRemovalTests
     {
         using var client = new SmtpClient();
         await client.ConnectAsync("127.0.0.1", port, SecureSocketOptions.None, _ct);
+        await client.AuthenticateAsync("teste@teste.local", "teste", _ct);
         await client.SendAsync(ServerFixture.Simple("para apagar"), _ct);
         await client.DisconnectAsync(true, _ct);
     }

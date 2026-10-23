@@ -9,11 +9,11 @@
           <div class="choices">
             <label class="check option" :class="{ chosen: passwordMode === 'any' }">
               <input type="radio" name="password-mode" :checked="passwordMode === 'any'" @change="setPasswordMode('any')">
-              <span><b>Aceitar qualquer usuário e senha</b><br><span class="muted small">Recomendado para testes. Qualquer combinação entra, então o aplicativo nunca falha por senha.</span></span>
+              <span><b>Aceitar qualquer usuário e senha</b><br><span class="muted small">Qualquer combinação entra, então o aplicativo nunca falha por senha.</span></span>
             </label>
             <label class="check option" :class="{ chosen: passwordMode === 'users' }">
               <input type="radio" name="password-mode" :checked="passwordMode === 'users'" @change="setPasswordMode('users')">
-              <span><b>Aceitar só os usuários cadastrados</b><br><span class="muted small">Para testar senha errada. Quem não estiver na lista, ou errar a senha, recebe o erro de autenticação do protocolo: <code>535</code> no SMTP, <code>-ERR</code> no POP3 e <code>NO</code> no IMAP.</span></span>
+              <span><b>Aceitar só os usuários cadastrados</b><br><span class="muted small">Padrão, como num servidor real. Quem não estiver na lista, ou errar a senha, recebe o erro de autenticação do protocolo: <code>535</code> no SMTP, <code>-ERR</code> no POP3 e <code>NO</code> no IMAP.</span></span>
             </label>
           </div>
           <div class="users" x-show="passwordMode === 'users'">

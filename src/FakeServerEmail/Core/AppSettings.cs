@@ -23,11 +23,11 @@ public sealed class AppSettings
     public int HttpsPort { get; set; } = 5443;
     public bool AllowNetworkAccess { get; set; }
     public bool OpenBrowserOnStart { get; set; } = true;
-    public bool SmtpRequireAuth { get; set; }
+    public bool SmtpRequireAuth { get; set; } = true;
     public bool OfferStartTls { get; set; } = true;
     public List<string> AuthMechanisms { get; set; } = [.. Sasl.Mechanisms];
-    public bool AcceptAnyPassword { get; set; } = true;
-    public List<UserAccount> Users { get; set; } = [];
+    public bool AcceptAnyPassword { get; set; }
+    public List<UserAccount> Users { get; set; } = [new UserAccount { Username = "teste@teste.local", Password = "teste" }];
     public bool ValidateOAuthTokens { get; set; } = true;
     public int TokenLifetimeSeconds { get; set; } = 3600;
     public bool SeparateMailboxesByRecipient { get; set; }

@@ -55,6 +55,8 @@ public sealed class ServerFixture : IAsyncLifetime
             s.HttpPort = Http;
             s.HttpsPort = Https;
             s.OpenBrowserOnStart = false;
+            s.AcceptAnyPassword = true;
+            s.SmtpRequireAuth = false;
         });
     }
 

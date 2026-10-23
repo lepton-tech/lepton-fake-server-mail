@@ -1,4 +1,5 @@
 using System.Text.Json;
+using MailKit.Net.Imap;
 using MailKit.Net.Smtp;
 using MailKit.Security;
 using ModelContextProtocol.Client;
@@ -222,6 +223,36 @@ public sealed class McpHttpTests(ServerFixture fx)
         finally
         {
             await client.CallJsonAsync("update_settings", new() { ["offerStartTls"] = true, ["authMechanisms"] = new[] { "PLAIN", "LOGIN", "XOAUTH2", "OAUTHBEARER" } }, _ct);
+        }
+    }
+
+    [Fact]
+    public async Task Update_settings_desliga_servicos_e_troca_portas()
+    {
+        await using var client = await ConnectAsync();
+        var imaps = ServerFixture.FreePort();
+        try
+        {
+            var saved = await client.CallJsonAsync("update_settings", new() { ["pop3Port"] = 0, ["imapsPort"] = imaps }, _ct);
+            var services = saved.GetProperty("services").EnumerateArray().ToDictionary(s => s.GetProperty("name").GetString()!);
+            Assert.False(services["POP3"].GetProperty("running").GetBoolean());
+            Assert.Equal(imaps, services["IMAPS"].GetProperty("port").GetInt32());
+            Assert.False(fx.Server.Services.Single(s => s.Name == "POP3").Running);
+
+            using (var imap = new ImapClient { ServerCertificateValidationCallback = (_, _, _, _) => true })
+            {
+                await imap.ConnectAsync("127.0.0.1", imaps, SecureSocketOptions.SslOnConnect, _ct);
+                Assert.True(imap.IsSecure);
+                await imap.DisconnectAsync(true, _ct);
+            }
+
+            var error = await client.CallErrorAsync("update_settings", new() { ["smtpPort"] = 70000 }, _ct);
+            Assert.Contains("smtpPort", error);
+            Assert.Equal(fx.Smtp, fx.Server.Context.Settings.Current.SmtpPort);
+        }
+        finally
+        {
+            await client.CallJsonAsync("update_settings", new() { ["pop3Port"] = fx.Pop3, ["imapsPort"] = fx.Imaps }, _ct);
         }
     }
 }

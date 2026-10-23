@@ -17,9 +17,9 @@ Dê dois cliques no executável: os serviços sobem e o navegador abre a caixa d
 | IMAPS | 993 | TLS direto |
 | Interface web e OAuth | 5080 (HTTP) e 5443 (HTTPS) | |
 
-Se uma porta estiver ocupada, o servidor escolhe outra sozinho (por exemplo, 25 vira 2025) e mostra a porta real no console e na interface.
+Se uma porta estiver ocupada, o servidor escolhe outra sozinho (por exemplo, 25 vira 2025) e mostra a porta real no console e na interface. Em **Configurações → Portas** dá para trocar a porta de cada serviço ou usar 0 para desligar os que não forem usados.
 
-- **Autenticação:** por padrão, aceita qualquer usuário e senha (PLAIN, LOGIN, XOAUTH2 e OAUTHBEARER). Em **Configurações → Usuário e senha** dá para aceitar só usuários cadastrados, para testar senha errada. Em **Regras de envio e de tokens** dá para exigir login no SMTP e validar os tokens OAuth. Em **STARTTLS e mecanismos de login** dá para desligar o STARTTLS e escolher quais mecanismos anunciar (só PLAIN, por exemplo), para imitar um servidor mais limitado.
+- **Autenticação:** por padrão, só entra o usuário `teste@teste.local` com a senha `teste`, e o SMTP exige login para enviar (PLAIN, LOGIN, XOAUTH2 e OAUTHBEARER). Em **Configurações → Usuário e senha** dá para cadastrar outros usuários ou aceitar qualquer usuário e senha. Em **Regras de envio e de tokens** dá para deixar o SMTP enviar sem login e validar os tokens OAuth. Em **STARTTLS e mecanismos de login** dá para desligar o STARTTLS e escolher quais mecanismos anunciar (só PLAIN, por exemplo), para imitar um servidor mais limitado.
 - **OAuth 2.0:** `authorization_code` com PKCE, `refresh_token`, `client_credentials`, `password` e `device_code`, com discovery OIDC, JWKS e rotas no estilo Microsoft (`/{tenant}/oauth2/v2.0/token`). Os tokens são JWT assinados, e os serviços de e-mail recusam token expirado, revogado ou de outro usuário.
 - **Interface:** visualização HTML, texto, cabeçalhos, código-fonte, anexos, dados de entrega, log completo das conexões, tokens emitidos e exemplos de código para conectar.
 - **Dados:** ficam em `%LOCALAPPDATA%\FakeServerEmail` (mensagens em `.eml`, configurações, certificado TLS autoassinado e chave do OAuth). Use `--data <pasta>` para outra pasta e `--no-browser` para não abrir o navegador.
@@ -48,7 +48,7 @@ A aba **Como conectar** da interface mostra a configuração pronta para Claude 
 | `delete_messages`, `mark_messages` | limpar a caixa, marcar como lida ou não lida |
 | `create_oauth_token`, `list_oauth_tokens`, `revoke_oauth_token` | tokens para XOAUTH2/OAUTHBEARER e teste de recusa |
 | `list_connections`, `get_connection_log` | depurar por que o sistema não conseguiu enviar ou autenticar |
-| `update_settings` | exigir senha, exigir AUTH no SMTP, desligar STARTTLS, mecanismos de AUTH, validade dos tokens etc. |
+| `update_settings` | usuários e senhas, exigir AUTH no SMTP, desligar STARTTLS, mecanismos de AUTH, portas (0 desliga o serviço), validade dos tokens etc. |
 
 ## Estrutura do frontend
 

@@ -36,20 +36,7 @@ public sealed partial class MailTools(MailApiClient api)
         {
             host = "localhost",
             serverTime = status.GetProperty("serverTime"),
-            services = status.GetProperty("services").EnumerateArray().Select(s => new
-            {
-                name = s.GetProperty("name").GetString(),
-                protocol = s.GetProperty("protocol").GetString(),
-                port = s.GetProperty("port").ValueKind == JsonValueKind.Number ? s.GetProperty("port").GetInt32() : (int?)null,
-                security = s.GetProperty("tls").GetString() switch
-                {
-                    "implicit" => "TLS direto (SSL)",
-                    "none" => "texto puro, sem STARTTLS (desligado em offerStartTls)",
-                    _ => "texto puro, STARTTLS opcional",
-                },
-                running = s.GetProperty("running").GetBoolean(),
-                note = s.GetProperty("error").GetString(),
-            }),
+            services = Services(status),
             authentication = new
             {
                 acceptAnyPassword = settings.AcceptAnyPassword,
@@ -410,10 +397,10 @@ public sealed partial class MailTools(MailApiClient api)
     }
 
     [McpServerTool(Name = "update_settings", Title = "Alterar configurações", Idempotent = true)]
-    [Description("Altera regras do servidor para simular cenários: exigir senha correta, exigir autenticação no SMTP, desligar o STARTTLS, escolher os mecanismos de AUTH anunciados, validar tokens OAuth, validade dos tokens, separar caixas por destinatário e tamanho máximo. Só muda os campos informados.")]
+    [Description("Altera regras do servidor para simular cenários: exigir senha correta, exigir autenticação no SMTP, desligar o STARTTLS, escolher os mecanismos de AUTH anunciados, validar tokens OAuth, validade dos tokens, separar caixas por destinatário, tamanho máximo e as portas de SMTP/POP3/IMAP (0 desliga o serviço). Só muda os campos informados. Retorna as portas reais depois da mudança.")]
     public async Task<object> UpdateSettings(
-        [Description("Aceitar qualquer usuário e senha.")] bool? acceptAnyPassword = null,
-        [Description("Usuários aceitos quando acceptAnyPassword = false, no formato \"usuario:senha\".")] string[]? users = null,
+        [Description("Aceitar qualquer usuário e senha. Padrão: false.")] bool? acceptAnyPassword = null,
+        [Description("Usuários aceitos quando acceptAnyPassword = false, no formato \"usuario:senha\". Substitui a lista inteira. Padrão: [\"teste@teste.local:teste\"].")] string[]? users = null,
         [Description("Exigir AUTH antes de MAIL FROM no SMTP.")] bool? smtpRequireAuth = null,
         [Description("Anunciar e aceitar STARTTLS (STLS no POP3) nas portas sem TLS. false simula um servidor sem STARTTLS; as portas de TLS direto continuam iguais.")] bool? offerStartTls = null,
         [Description("Mecanismos SASL anunciados e aceitos no AUTH do SMTP, POP3 e IMAP, entre PLAIN, LOGIN, XOAUTH2 e OAUTHBEARER. Ex.: [\"PLAIN\"]. Lista vazia: o servidor não anuncia AUTH. O comando LOGIN do IMAP e o USER/PASS do POP3 continuam aceitos.")] string[]? authMechanisms = null,
@@ -421,8 +408,18 @@ public sealed partial class MailTools(MailApiClient api)
         [Description("Validade padrão dos tokens OAuth em segundos.")] int? tokenLifetimeSeconds = null,
         [Description("No POP3/IMAP, login com e-mail vê só as mensagens endereçadas a ele.")] bool? separateMailboxesByRecipient = null,
         [Description("Tamanho máximo de mensagem em MB.")] int? maxMessageSizeMb = null,
+        [Description("Porta do SMTP sem TLS (padrão 25). 0 desliga.")] int? smtpPort = null,
+        [Description("Porta do SMTP de submissão (padrão 587). 0 desliga.")] int? smtpSubmissionPort = null,
+        [Description("Porta do SMTPS, TLS direto (padrão 465). 0 desliga.")] int? smtpsPort = null,
+        [Description("Porta do POP3 sem TLS (padrão 110). 0 desliga.")] int? pop3Port = null,
+        [Description("Porta do POP3S, TLS direto (padrão 995). 0 desliga.")] int? pop3sPort = null,
+        [Description("Porta do IMAP sem TLS (padrão 143). 0 desliga.")] int? imapPort = null,
+        [Description("Porta do IMAPS, TLS direto (padrão 993). 0 desliga.")] int? imapsPort = null,
         CancellationToken ct = default)
     {
+        static int Port(int value, string name) =>
+            value is >= 0 and <= 65535 ? value : throw new McpException($"{name} inválida: use de 1 a 65535, ou 0 para desligar o serviço.");
+
         var settings = await api.GetAsync<AppSettings>("/api/settings", ct);
         if (acceptAnyPassword is not null) settings.AcceptAnyPassword = acceptAnyPassword.Value;
         if (users is not null)
@@ -440,8 +437,16 @@ public sealed partial class MailTools(MailApiClient api)
         if (tokenLifetimeSeconds is not null) settings.TokenLifetimeSeconds = tokenLifetimeSeconds.Value;
         if (separateMailboxesByRecipient is not null) settings.SeparateMailboxesByRecipient = separateMailboxesByRecipient.Value;
         if (maxMessageSizeMb is not null) settings.MaxMessageSizeMb = maxMessageSizeMb.Value;
+        if (smtpPort is not null) settings.SmtpPort = Port(smtpPort.Value, "smtpPort");
+        if (smtpSubmissionPort is not null) settings.SmtpSubmissionPort = Port(smtpSubmissionPort.Value, "smtpSubmissionPort");
+        if (smtpsPort is not null) settings.SmtpsPort = Port(smtpsPort.Value, "smtpsPort");
+        if (pop3Port is not null) settings.Pop3Port = Port(pop3Port.Value, "pop3Port");
+        if (pop3sPort is not null) settings.Pop3sPort = Port(pop3sPort.Value, "pop3sPort");
+        if (imapPort is not null) settings.ImapPort = Port(imapPort.Value, "imapPort");
+        if (imapsPort is not null) settings.ImapsPort = Port(imapsPort.Value, "imapsPort");
         await api.SendAsync(HttpMethod.Put, "/api/settings", settings, ct);
         var saved = await api.GetAsync<AppSettings>("/api/settings", ct);
+        var status = await api.GetAsync<JsonElement>("/api/status", ct);
         return new
         {
             saved.AcceptAnyPassword,
@@ -453,6 +458,7 @@ public sealed partial class MailTools(MailApiClient api)
             saved.TokenLifetimeSeconds,
             saved.SeparateMailboxesByRecipient,
             saved.MaxMessageSizeMb,
+            services = Services(status),
         };
     }
 
@@ -495,6 +501,22 @@ public sealed partial class MailTools(MailApiClient api)
             warning = detail.ParseError,
         };
     }
+
+    private static IEnumerable<object> Services(JsonElement status) =>
+        status.GetProperty("services").EnumerateArray().Select(s => new
+        {
+            name = s.GetProperty("name").GetString(),
+            protocol = s.GetProperty("protocol").GetString(),
+            port = s.GetProperty("port").ValueKind == JsonValueKind.Number ? s.GetProperty("port").GetInt32() : (int?)null,
+            security = s.GetProperty("tls").GetString() switch
+            {
+                "implicit" => "TLS direto (SSL)",
+                "none" => "texto puro, sem STARTTLS (desligado em offerStartTls)",
+                _ => "texto puro, STARTTLS opcional",
+            },
+            running = s.GetProperty("running").GetBoolean(),
+            note = s.GetProperty("error").GetString(),
+        }).ToList();
 
     private static object Summary(StoredMessage m) => new
     {

@@ -46,6 +46,7 @@ public sealed class McpStdioTests : IDisposable
     {
         using var smtp = new SmtpClient();
         await smtp.ConnectAsync("127.0.0.1", _smtp, SecureSocketOptions.None, _ct);
+        await smtp.AuthenticateAsync("teste@teste.local", "teste", _ct);
         await smtp.SendAsync(ServerFixture.Simple(subject), _ct);
         await smtp.DisconnectAsync(true, _ct);
     }
