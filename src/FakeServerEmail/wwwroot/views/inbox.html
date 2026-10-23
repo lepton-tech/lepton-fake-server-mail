@@ -1,0 +1,115 @@
+<section class="view" id="view-inbox" x-data="inbox" x-show="$store.app.view === 'inbox'" x-cloak @keydown.window="onKey($event)">
+  <div class="split" :class="{ reading: detail }">
+    <aside class="list-pane">
+      <div class="list-tools">
+        <div class="row">
+          <input type="search" x-model="search" placeholder="Buscar assunto, remetente, destinatário" aria-label="Buscar mensagens">
+          <button id="btn-send-test" title="Enviar um e-mail de teste pelo SMTP local" @click="openSend()">Enviar teste</button>
+        </div>
+        <div class="row">
+          <select id="folder" aria-label="Pasta" x-model="folder" @change="changeFolder()">
+            <option value="*">Todas as pastas</option>
+            <template x-for="f in folders" :key="f.name">
+              <option :value="f.name" x-text="folderLabel(f)" :selected="f.name === folder"></option>
+            </template>
+          </select>
+          <button class="ghost icon" id="btn-refresh" :class="{ spinning: refreshing }" title="Atualizar caixa de entrada" aria-label="Atualizar caixa de entrada" @click="refresh()">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20v-4h-4"/></svg>
+          </button>
+          <button class="ghost icon" id="btn-read-all" title="Marcar todas como lidas" aria-label="Marcar todas como lidas" @click="readAll()">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5"/></svg>
+          </button>
+          <button class="ghost icon danger" id="btn-delete-all" title="Apagar todas as mensagens da pasta" aria-label="Apagar todas as mensagens da pasta" @click="deleteAll()">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13M10 11v5.5M14 11v5.5"/></svg>
+          </button>
+        </div>
+      </div>
+      <ul class="items" id="messages">
+        <template x-for="m in filtered" :key="m.id">
+          <li :data-id="m.id" tabindex="0" :aria-current="m.id === selectedId" :class="{ unread: !isSeen(m), selected: m.id === selectedId }" @click="select(m.id)" @keydown.enter.prevent="select(m.id)" @keydown.space.prevent="select(m.id)">
+            <span class="who" x-text="who(m)"></span>
+            <span class="sr-only" x-show="!isSeen(m)">não lida</span>
+            <span class="when" x-text="fmtShort(m.receivedAt)"></span>
+            <span class="subject" x-text="m.subject || '(sem assunto)'"></span>
+            <span class="meta">
+              <span x-text="'para ' + recipients(m)"></span>
+              <span class="tag" x-show="showFolderTag(m)" x-text="m.folder"></span>
+              <span class="tag" x-show="m.hasAttachments">📎 anexo</span>
+              <span class="tag ok" x-show="m.authenticatedUser" title="Enviado com autenticação" x-text="'🔑 ' + m.authenticatedUser"></span>
+              <span x-text="fmtSize(m.size)"></span>
+            </span>
+          </li>
+        </template>
+      </ul>
+      <div class="empty" x-show="messages.length === 0">
+        <p><b>Nenhuma mensagem ainda.</b></p>
+        <p>Envie um e-mail para <code x-text="smtpAddress"></code> ou clique em <b>Enviar teste</b>.</p>
+      </div>
+      <div class="empty" x-show="messages.length > 0 && filtered.length === 0">
+        <p><b>Nenhuma mensagem encontrada para essa busca.</b></p>
+        <p>Confira o texto digitado ou apague a busca para ver todas as mensagens.</p>
+      </div>
+    </aside>
+
+    <article class="reader">
+      <div class="empty reader-empty" x-show="!detail"><p>Selecione uma mensagem para visualizar.</p></div>
+      <template x-if="detail">
+        <div class="reader-content">
+          <div class="reader-head">
+            <div class="reader-actions">
+              <button class="ghost mobile-only" @click="close()">← Voltar</button>
+              <span class="spacer"></span>
+              <button class="ghost" @click="markUnread()">Marcar como não lida</button>
+              <a class="button ghost" :href="`/api/messages/${detail.summary.id}/raw?download=true`">Baixar .eml</a>
+              <button class="ghost danger" @click="remove()">Apagar</button>
+            </div>
+            <h1 x-text="detail.subject || '(sem assunto)'"></h1>
+            <dl class="fields">
+              <template x-for="row in fieldRows" :key="row[0]">
+                <div><dt x-text="row[0]"></dt><dd x-text="row[1]"></dd></div>
+              </template>
+            </dl>
+          </div>
+          <div class="subtabs">
+            <template x-for="t in tabs" :key="t.id">
+              <button :class="{ active: tab === t.id }" :aria-pressed="tab === t.id" :disabled="!available(t.id)" @click="showTab(t.id)" x-text="tabLabel(t)"></button>
+            </template>
+          </div>
+          <div class="tab-body">
+            <iframe x-show="tab === 'html'" :src="htmlSrc" sandbox="allow-popups allow-popups-to-escape-sandbox" title="Conteúdo HTML"></iframe>
+            <pre class="mono" x-show="tab === 'text'" x-text="detail.text ?? ''"></pre>
+            <table class="grid" x-show="tab === 'headers'">
+              <template x-for="(h, i) in detail.headers" :key="i">
+                <tr><th x-text="h.name"></th><td class="mono" x-text="h.value"></td></tr>
+              </template>
+            </table>
+            <pre class="mono" x-show="tab === 'source'" x-text="source"></pre>
+            <div x-show="tab === 'attachments'">
+              <p class="muted" x-show="detail.attachments.length === 0">Esta mensagem não tem anexos.</p>
+              <div class="attachments">
+                <template x-for="a in detail.attachments" :key="a.index">
+                  <div class="attachment">
+                    <template x-if="a.contentType.startsWith('image/')">
+                      <img :src="partUrl(a)" alt="">
+                    </template>
+                    <span class="name" x-text="a.fileName"></span>
+                    <span class="info" x-text="attachmentInfo(a)"></span>
+                    <div class="actions left">
+                      <a class="button ghost" :href="partUrl(a)" target="_blank" rel="noopener" :aria-label="'Abrir ' + a.fileName">Abrir</a>
+                      <a class="button ghost" :href="partUrl(a, true)" :aria-label="'Baixar ' + a.fileName">Baixar</a>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </div>
+            <table class="grid" x-show="tab === 'delivery'">
+              <template x-for="row in deliveryRows" :key="row[0]">
+                <tr><th x-text="row[0]"></th><td x-text="row[1]"></td></tr>
+              </template>
+            </table>
+          </div>
+        </div>
+      </template>
+    </article>
+  </div>
+</section>

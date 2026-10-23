@@ -1,0 +1,171 @@
+<section class="view" id="view-settings" x-data="settings" x-show="$store.app.view === 'settings'" x-cloak>
+  <div class="page">
+    <h2>Configurações</h2>
+    <template x-if="model">
+      <form id="settings-form" class="form settings" @submit.prevent="save()">
+        <div class="card">
+          <h3>Usuário e senha</h3>
+          <p class="muted small">Define o que acontece quando um aplicativo faz login com usuário e senha no SMTP, no POP3 ou no IMAP, ou pede um token OAuth pelo fluxo <code>password</code>. O login com token OAuth é configurado no próximo bloco.</p>
+          <div class="choices">
+            <label class="check option" :class="{ chosen: passwordMode === 'any' }">
+              <input type="radio" name="password-mode" :checked="passwordMode === 'any'" @change="setPasswordMode('any')">
+              <span><b>Aceitar qualquer usuário e senha</b><br><span class="muted small">Qualquer combinação entra, então o aplicativo nunca falha por senha.</span></span>
+            </label>
+            <label class="check option" :class="{ chosen: passwordMode === 'users' }">
+              <input type="radio" name="password-mode" :checked="passwordMode === 'users'" @change="setPasswordMode('users')">
+              <span><b>Aceitar só os usuários cadastrados</b><br><span class="muted small">Padrão, como num servidor real. Quem não estiver na lista, ou errar a senha, recebe o erro de autenticação do protocolo: <code>535</code> no SMTP, <code>-ERR</code> no POP3 e <code>NO</code> no IMAP.</span></span>
+            </label>
+          </div>
+          <div class="users" x-show="passwordMode === 'users'">
+            <table class="grid">
+              <tr><th>Usuário (normalmente o e-mail)</th><th>Senha</th><th><span class="sr-only">Ações</span></th></tr>
+              <template x-for="u in userRows" :key="u.id">
+                <tr>
+                  <td><input class="user-name" x-model="u.username" placeholder="ana@empresa.local" aria-label="Usuário"></td>
+                  <td><input x-model="u.password" placeholder="senha" aria-label="Senha" autocomplete="off"></td>
+                  <td><button type="button" class="ghost danger" :aria-label="u.username.trim() ? 'Remover o usuário ' + u.username.trim() : 'Remover esta linha'" @click="removeUser(u.id)">Remover</button></td>
+                </tr>
+              </template>
+              <tr x-show="userRows.length === 0"><td colspan="3" class="muted">Nenhum usuário cadastrado.</td></tr>
+            </table>
+            <div class="actions left"><button type="button" class="ghost" @click="addUser()">+ Adicionar usuário</button></div>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Regras de envio e de tokens</h3>
+          <label class="check">
+            <input type="checkbox" x-model="model.smtpRequireAuth">
+            <span>Exigir login para enviar pelo SMTP<br><span class="muted small">Desligado, qualquer aplicativo envia sem fazer login. Ligado, quem tentar enviar sem login recebe <code>530 Autenticação obrigatória</code>, como num servidor real.</span></span>
+          </label>
+          <label class="check">
+            <input type="checkbox" x-model="model.validateOAuthTokens">
+            <span>Validar tokens OAuth<br><span class="muted small">Ligado, o login com token (XOAUTH2 ou OAUTHBEARER) só passa se o token foi emitido por este servidor, está dentro da validade, não foi revogado e pertence ao mesmo usuário do login. Desligado, qualquer token passa.</span></span>
+          </label>
+          <label>Validade dos tokens OAuth (segundos) <input type="number" min="10" x-model="model.tokenLifetimeSeconds"></label>
+        </div>
+        <div class="card">
+          <h3>STARTTLS e mecanismos de login</h3>
+          <p class="muted small">Para imitar um servidor mais limitado e ver como o aplicativo reage. Vale para o SMTP, o POP3 e o IMAP.</p>
+          <label class="check">
+            <input type="checkbox" x-model="model.offerStartTls">
+            <span>Oferecer STARTTLS<br><span class="muted small">Desligado, as portas sem TLS deixam de anunciar o <code>STARTTLS</code> (<code>STLS</code> no POP3) e recusam o comando, como um servidor que só fala texto puro. As portas de TLS direto (SMTPS, POP3S e IMAPS) continuam iguais.</span></span>
+          </label>
+          <p class="muted small">Mecanismos anunciados no <code>AUTH</code>. Só os marcados aparecem no <code>EHLO</code>, no <code>CAPA</code> e no <code>CAPABILITY</code>; os outros são recusados como não suportados. O <code>LOGIN</code> do IMAP e o <code>USER</code>/<code>PASS</code> do POP3 não são mecanismos e continuam aceitos.</p>
+          <div class="choices">
+            <template x-for="m in mechanisms" :key="m[0]">
+              <label class="check option" :class="{ chosen: model.authMechanisms.includes(m[0]) }">
+                <input type="checkbox" :value="m[0]" x-model="model.authMechanisms">
+                <span><b x-text="m[0]"></b><br><span class="muted small" x-text="m[1]"></span></span>
+              </label>
+            </template>
+          </div>
+          <p class="muted small" x-show="model.authMechanisms.length === 0">Nenhum marcado: o servidor não anuncia <code>AUTH</code> e recusa qualquer tentativa. Com "Exigir login para enviar pelo SMTP" ligado, ninguém consegue enviar.</p>
+        </div>
+        <div class="card">
+          <h3>Caixas de correio</h3>
+          <label class="check"><input type="checkbox" x-model="model.separateMailboxesByRecipient"> Separar caixas por destinatário (no POP3/IMAP, quem entra com um e-mail vê só as mensagens enviadas para ele)</label>
+          <label>Tamanho máximo da mensagem (MB) <input type="number" min="1" max="1024" x-model="model.maxMessageSizeMb"></label>
+        </div>
+        <div class="card" id="portas">
+          <h3>Portas</h3>
+          <p class="muted small">Marque só o que o aplicativo testado usa. Se uma porta estiver ocupada, o servidor escolhe outra sozinho e mostra a porta real no topo da tela.</p>
+          <template x-for="g in portGroups" :key="g.title">
+            <div class="port-group">
+              <b x-text="g.title"></b>
+              <p class="muted small" x-text="g.hint"></p>
+              <div class="ports">
+                <template x-for="p in g.ports" :key="p.key">
+                  <div class="port">
+                    <label class="check" x-show="!p.required"><input type="checkbox" :checked="!off[p.key]" @change="toggle(p, $event.target.checked)"> <span x-text="p.label"></span></label>
+                    <span x-show="p.required" x-text="p.label"></span>
+                    <input type="number" min="1" max="65535" x-model="model[p.key]" x-show="!off[p.key]" :disabled="off[p.key]" :aria-label="'Porta: ' + p.label">
+                    <input type="text" placeholder="Desligado" disabled x-show="off[p.key]" :aria-label="p.label + ' desligado'">
+                    <span class="small" x-show="off[p.key]" x-text="'Ao ligar, usa a porta ' + suggestion(p)"></span>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
+          <label class="check"><input type="checkbox" x-model="model.allowNetworkAccess"> Aceitar conexões de outras máquinas e de containers Docker (o Windows pode pedir permissão no firewall)</label>
+          <label class="check"><input type="checkbox" x-model="model.openBrowserOnStart"> Abrir o navegador ao iniciar</label>
+        </div>
+        <div class="actions sticky">
+          <div class="notice small" x-show="externalChange" role="status">
+            <span>As configurações foram alteradas em outro lugar (por exemplo, por um agente de IA) enquanto você editava. Se clicar em <b>Salvar</b>, as suas mudanças substituem as de lá.</span>
+            <button type="button" class="ghost" @click="discard()">Descartar as minhas mudanças</button>
+          </div>
+          <span class="muted small" x-text="message"></span>
+          <span class="spacer"></span>
+          <button type="submit">Salvar</button>
+        </div>
+      </form>
+    </template>
+
+    <template x-if="certificate">
+      <div class="card" id="certificado">
+        <h3>Certificado TLS</h3>
+        <p class="muted small">As conexões com criptografia (STARTTLS, SMTPS, POP3S, IMAPS e HTTPS) usam um certificado criado por este programa para <code>localhost</code>. Para os aplicativos aceitarem sem aviso, configure-os para aceitar certificado inválido ou marque este certificado como confiável. A MSAL e outras bibliotecas da Microsoft exigem um certificado confiável.</p>
+        <p>
+          Situação:
+          <span class="tag" x-show="certificate.trustScope === 'none'">ainda não é confiável</span>
+          <span class="tag ok" x-show="certificate.trustScope === 'user'">confiável para o seu usuário</span>
+          <span class="tag ok" x-show="certificate.trustScope === 'computer'">confiável para todo o computador</span>
+          · válido até <span x-text="fmtDate(certificate.notAfter)"></span>
+          · <span class="mono small" x-text="certificate.thumbprint"></span>
+        </p>
+        <div class="choices">
+          <div class="option">
+            <b>Só para o meu usuário</b>
+            <p class="muted small">Vale para os programas que você abre, como Chrome, Edge e aplicativos .NET. Não precisa de administrador; o Windows mostra uma confirmação.</p>
+            <div class="actions left">
+              <button x-show="certificate.trustScope === 'none'" :disabled="trustBusy" @click="setTrust(true, 'user')">Confiar só para mim</button>
+              <button class="ghost" x-show="certificate.trustScope === 'user'" :disabled="trustBusy" @click="setTrust(false, 'user')">Remover do meu usuário</button>
+            </div>
+          </div>
+          <div class="option">
+            <b>Para todo o computador</b>
+            <p class="muted small">Vale também para o IIS, serviços do Windows, outros usuários e o Firefox (quando ele usa os certificados do Windows). O Windows pede permissão de administrador.</p>
+            <div class="actions left">
+              <button x-show="certificate.trustScope !== 'computer'" :disabled="trustBusy" @click="setTrust(true, 'computer')">Confiar para todo o computador</button>
+              <button class="ghost" x-show="certificate.trustScope === 'computer'" :disabled="trustBusy" @click="setTrust(false, 'computer')">Remover do computador</button>
+            </div>
+          </div>
+        </div>
+        <p class="muted small" x-show="trustBusy" role="status">Aguardando a confirmação do Windows…</p>
+        <div class="actions left">
+          <a class="button ghost" href="/api/certificate">Baixar .cer</a>
+        </div>
+      </div>
+    </template>
+
+    <div class="card">
+      <h3>Servidor</h3>
+      <p class="muted small" x-text="info"></p>
+      <div class="actions left">
+        <button class="ghost" @click="shutdown()">Encerrar servidor</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Dados guardados</h3>
+      <p class="muted small">E-mails, tokens, configurações, chave do OAuth e certificado ficam em <code x-text="dataDirectory"></code>.</p>
+      <div class="data-actions">
+        <div>
+          <b>Abrir pasta</b>
+          <p class="muted small">Mostra os arquivos no Explorador do Windows. Cada e-mail é um <code>.eml</code>.</p>
+          <button class="ghost" @click="openFolder()">Abrir pasta de dados</button>
+        </div>
+        <div>
+          <b>Limpar dados</b>
+          <p class="muted small">Apaga todos os e-mails, as pastas criadas, os tokens OAuth e o log de conexões. As configurações continuam e o servidor segue rodando.</p>
+          <button class="ghost danger" id="btn-clear-data" @click="clearData()">Limpar dados</button>
+        </div>
+        <div>
+          <b>Remover dados do computador</b>
+          <p class="muted small">Apaga tudo o que o programa gravou, inclusive configurações e certificado, tira o certificado da lista de confiáveis do Windows e fecha o programa. Depois disso, basta apagar o <code>.exe</code>: nada mais fica no computador.</p>
+          <button class="danger-solid" id="btn-remove-data" @click="removeData()">Remover dados do computador</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
