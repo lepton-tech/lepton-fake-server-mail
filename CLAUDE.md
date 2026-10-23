@@ -24,6 +24,7 @@ dotnet test --project tests\FakeServerEmail.Tests --filter-class "*SmtpTests"
 dotnet format whitespace --verify-no-changes
 .\publicar.ps1                                                      # dist\FakeServerEmail.exe (win-x64)
 .\publicar.ps1 -Runtime win-x64,win-x86,win-arm64
+.\preparar-versao.ps1 1.1.0                                         # branch release/1.1.0 com versão e changelog, e PR para a develop
 .\lancar-versao.ps1                                                 # na main: testa, gera os três exe e publica a release
 ```
 
@@ -38,7 +39,8 @@ O repositório é `lepton-tech/lepton-fake-server-mail`, e o fluxo completo est�
 
 - **Branches protegidas:** nunca faça commit nem push na `main` ou na `develop`. Toda mudança sai de uma branch criada a partir da `develop` (`feature/`, `fix/`, `docs/`) e entra por PR na `develop`. A `develop` vai para a `main` por outra PR. Cada PR precisa da aprovação de outra pessoa.
 - **Merge:** sempre com merge commit (`gh pr merge --merge`). Squash ou rebase na PR da `develop` para a `main` fazem as duas divergirem.
-- **Versão:** é a `<Version>` do `.csproj`, que vira a tag `v<Version>`. O `lancar-versao.ps1`, rodado na `main` igual à do GitHub, testa, gera os três exe e publica a release com eles como assets.
+- **Changelog:** mudança que aparece para quem usa o programa ganha uma linha em pt-br simples no `CHANGELOG.md`, na seção `## Não lançado`, embaixo de `### Novidades`, `### Mudanças` ou `### Correções`. Mudança só interna não entra.
+- **Versão:** é a `<Version>` do `.csproj`, lida pelo `FakeMailServer.Version` (banner e MCP), e vira a tag `v<Version>`. Não mude à mão: o `preparar-versao.ps1` muda a versão e transforma o `Não lançado` na seção da versão, numa PR para a `develop`. O `lancar-versao.ps1`, rodado na `main` igual à do GitHub, testa, gera os três exe, confere a versão deles e publica a release com a seção do changelog como notas e os exe como assets.
 - **Sem pipeline:** não há GitHub Actions. Build, testes e release rodam localmente, com o `gh`. As skills `/pr` e `/lancar-versao` seguem esse fluxo.
 
 ## Arquitetura

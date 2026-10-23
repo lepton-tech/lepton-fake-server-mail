@@ -35,6 +35,16 @@ git switch -c feature/descricao-curta
 
 Use `feature/` para novidade, `fix/` para correção e `docs/` para documentação.
 
+Se a mudança aparece para quem usa o programa, acrescente uma linha no `CHANGELOG.md`, na seção **Não lançado**, embaixo de `### Novidades`, `### Mudanças` ou `### Correções` (crie o título se ainda não existir). Escreva para quem usa o programa, não para quem lê o código. Mudança só interna, como testes, refatoração ou documentação de desenvolvimento, não entra.
+
+```markdown
+## Não lançado
+
+### Correções
+
+- O envio de teste funciona quando o SMTP exige login.
+```
+
 Antes de abrir a PR, rode o que o GitHub não vai rodar por você:
 
 ```powershell
@@ -73,11 +83,17 @@ gh pr merge <número> --merge
 
 ## 3. Lançar uma versão
 
-A versão é a `<Version>` de `src/FakeServerEmail/FakeServerEmail.csproj` e vira a tag `v<Version>`.
+A versão é a `<Version>` de `src/FakeServerEmail/FakeServerEmail.csproj`. É ela que vai no executável (nas propriedades do arquivo no Windows, no banner do console e no servidor MCP) e que vira a tag `v<Version>`. Não mude a versão à mão: o `preparar-versao.ps1` muda a versão e o changelog juntos.
 
-1. Numa PR para a `develop` (passo 1), aumente a `<Version>`: `1.0.1` para correção, `1.1.0` para novidade, `2.0.0` para mudança que quebra o uso.
-2. Leve a `develop` para a `main` (passo 2).
-3. Com a `main` atualizada, rode o script:
+1. Prepare a versão, escolhendo o número pelo que está em **Não lançado**: `1.0.1` se só há correções, `1.1.0` se há novidades ou mudanças, `2.0.0` se algo quebra o uso.
+
+   ```powershell
+   .\preparar-versao.ps1 1.1.0
+   ```
+
+   O script cria a branch `release/1.1.0` a partir da `develop`, muda a `<Version>` do `.csproj`, transforma o **Não lançado** do `CHANGELOG.md` na seção `1.1.0` com a data de hoje e abre a PR para a `develop`. Ele para se o **Não lançado** estiver vazio. Quem revisa a PR revisa também o texto do changelog, que vai virar as notas da release.
+2. Depois do merge dessa PR, leve a `develop` para a `main` (passo 2).
+3. Com a `main` atualizada, publique:
 
    ```powershell
    git switch main
@@ -85,11 +101,11 @@ A versão é a `<Version>` de `src/FakeServerEmail/FakeServerEmail.csproj` e vir
    .\lancar-versao.ps1
    ```
 
-O script leva alguns minutos e faz, nesta ordem:
+O `lancar-versao.ps1` leva alguns minutos e faz, nesta ordem:
 
-1. Confere que não há alterações locais, que o código é exatamente o da `main` do GitHub e que a tag ainda não existe.
+1. Confere que não há alterações locais, que o código é exatamente o da `main` do GitHub, que a tag ainda não existe e que o `CHANGELOG.md` tem a seção da versão.
 2. Roda `dotnet test`.
-3. Gera os três executáveis com o `publicar.ps1`.
+3. Gera os três executáveis com o `publicar.ps1` e confere que eles saíram com a versão do `.csproj`.
 4. Cria a release como rascunho, envia os executáveis e só então publica. É nesse momento que a tag é criada, no commit da `main`.
 
 | Arquivo da release | Para |
@@ -98,7 +114,7 @@ O script leva alguns minutos e faz, nesta ordem:
 | `FakeServerEmail-x86.exe` | Windows de 32 bits |
 | `FakeServerEmail-arm64.exe` | Windows em processador ARM |
 
-As notas da release trazem essa tabela e a lista das PRs desde a versão anterior.
+As notas da release são a seção da versão no `CHANGELOG.md`, seguidas dessa tabela.
 
 Se o script parar no meio, nada foi publicado. A mensagem de erro diz o que fazer, por exemplo apagar um rascunho que ficou para trás com `gh release delete vX.Y.Z --yes`.
 
@@ -106,7 +122,7 @@ Se o script parar no meio, nada foi publicado. A mensagem de erro diz o que faze
 
 O repositório traz duas skills em `.claude/skills/`, que seguem este fluxo:
 
-- `/pr`: cria a branch quando você está na `develop` ou na `main`, roda build e testes, faz o commit, envia e abre a PR para a `develop`.
-- `/lancar-versao`: confere a versão, abre a PR da `develop` para a `main` e, depois do merge, roda o `lancar-versao.ps1`.
+- `/pr`: cria a branch quando você está na `develop` ou na `main`, registra a mudança no `CHANGELOG.md` quando ela aparece para quem usa, roda build e testes, faz o commit, envia e abre a PR para a `develop`.
+- `/lancar-versao`: sugere o número da versão, roda o `preparar-versao.ps1`, abre a PR da `develop` para a `main` e, depois do merge, roda o `lancar-versao.ps1`.
 
 As duas param na aprovação, que é sempre de outra pessoa.
