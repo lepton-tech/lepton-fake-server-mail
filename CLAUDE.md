@@ -24,12 +24,22 @@ dotnet test --project tests\FakeServerEmail.Tests --filter-class "*SmtpTests"
 dotnet format whitespace --verify-no-changes
 .\publicar.ps1                                                      # dist\FakeServerEmail.exe (win-x64)
 .\publicar.ps1 -Runtime win-x64,win-x86,win-arm64
+.\lancar-versao.ps1                                                 # na main: testa, gera os três exe e publica a release
 ```
 
 - O `Directory.Build.props` liga os analisadores `latest-recommended`, o estilo do `.editorconfig` no build e `TreatWarningsAsErrors`: qualquer aviso quebra o build. As versões dos pacotes ficam em `Directory.Packages.props`.
 - Os testes usam o Microsoft.Testing.Platform (definido em `global.json`) com xUnit v3, por isso o filtro é `--filter-method`/`--filter-class`, não `--filter`.
 - O `wwwroot` está embutido: mudança de HTML, CSS ou JS só aparece depois de recompilar e reiniciar o servidor. `node --check arquivo.js` serve para conferir a sintaxe de um JS.
 - O `publicar.ps1` apaga `artifacts\publish\<rid>` e sobrescreve `dist\`. Ele falha se alguma instância do exe estiver aberta. Para encerrar uma instância, use `POST /api/shutdown` na URL gravada em `%LOCALAPPDATA%\FakeServerEmail\em-execucao.json`.
+
+## Git, PRs e versões
+
+O repositório é `lepton-tech/lepton-fake-server-mail`, e o fluxo completo está no [CONTRIBUTING.md](CONTRIBUTING.md).
+
+- **Branches protegidas:** nunca faça commit nem push na `main` ou na `develop`. Toda mudança sai de uma branch criada a partir da `develop` (`feature/`, `fix/`, `docs/`) e entra por PR na `develop`. A `develop` vai para a `main` por outra PR. Cada PR precisa da aprovação de outra pessoa.
+- **Merge:** sempre com merge commit (`gh pr merge --merge`). Squash ou rebase na PR da `develop` para a `main` fazem as duas divergirem.
+- **Versão:** é a `<Version>` do `.csproj`, que vira a tag `v<Version>`. O `lancar-versao.ps1`, rodado na `main` igual à do GitHub, testa, gera os três exe e publica a release com eles como assets.
+- **Sem pipeline:** não há GitHub Actions. Build, testes e release rodam localmente, com o `gh`. As skills `/pr` e `/lancar-versao` seguem esse fluxo.
 
 ## Arquitetura
 

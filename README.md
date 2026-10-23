@@ -15,7 +15,7 @@ Você aponta o sistema que está testando para o Fake Server Email, e todo e-mai
 
 ## Como usar
 
-1. Baixe o `FakeServerEmail.exe` na página de **Releases** deste repositório. Funciona no Windows 10 e 11.
+1. Baixe o `FakeServerEmail.exe` na página de [**Releases**](https://github.com/lepton-tech/lepton-fake-server-mail/releases/latest) deste repositório. Funciona no Windows 10 e 11. Há também versões para Windows de 32 bits (`FakeServerEmail-x86.exe`) e ARM (`FakeServerEmail-arm64.exe`).
 2. Dê dois cliques no arquivo. Uma janela preta (o console) abre e o navegador mostra a caixa de entrada em `http://localhost:5080`.
    - Como o arquivo não é assinado digitalmente, o Windows pode mostrar "O Windows protegeu o computador". Clique em **Mais informações** e depois em **Executar assim mesmo**.
 3. No sistema que você quer testar, configure o envio de e-mail (SMTP) com estes dados:
@@ -163,7 +163,7 @@ O build usa os analisadores do .NET no nível `latest-recommended` e trata qualq
 
 A interface usa [Alpine.js](https://alpinejs.dev/) 3.17.4 (cópia local em `wwwroot/vendor/`, sem CDN) e módulos ES, sem etapa de compilação. Cada tela é um par `views/<tela>.html` + `js/views/<tela>.js`.
 
-A arquitetura e as convenções do projeto estão descritas no [CLAUDE.md](CLAUDE.md).
+A arquitetura e as convenções do projeto estão descritas no [CLAUDE.md](CLAUDE.md). O fluxo de branches, PRs e versões (`main` e `develop` só recebem PR, e a release com os executáveis é gerada localmente pelo `lancar-versao.ps1`) está no [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Licença
 
