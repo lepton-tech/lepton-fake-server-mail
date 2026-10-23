@@ -3,7 +3,7 @@
 ## Regras do repositório
 
 - `main` e `develop` são protegidas. Ninguém faz commit nem push direto nelas, e elas não podem ser apagadas nem receber push forçado.
-- Toda mudança entra por pull request (PR), e cada PR precisa da aprovação de uma pessoa que não seja o autor.
+- Toda mudança entra por pull request (PR), e cada PR precisa da aprovação de uma pessoa que não seja o autor. Quem está na lista de bypass das regras (hoje `lenerson` e `ramon-oliveira-lepton`) pode fazer o merge sem aprovação com `gh pr merge <número> --merge --admin`, mas também não consegue fazer push direto.
 - O código só chega à `main` passando pela `develop`.
 
 ```
