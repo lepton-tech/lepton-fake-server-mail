@@ -9,10 +9,12 @@
 Every email the system under test sends is caught here, in an inbox in your browser.<br>
 It is a single file for Windows: nothing to install, no server to set up.
 
-<a href="https://github.com/lepton-tech/lepton-fake-server-mail/releases/latest/download/FakeServerEmail.exe"><img src="https://img.shields.io/badge/Download_for_Windows-FakeServerEmail.exe-2f6fde?style=for-the-badge&logo=windows&logoColor=white" height="48" alt="Download for Windows: FakeServerEmail.exe"></a>
+<a href="https://github.com/lepton-tech/lepton-fake-server-mail/releases/latest/download/FakeServerEmail.exe"><img src="docs/imagens/download-for-windows.svg" width="460" alt="Download for Windows: FakeServerEmail.exe"></a>
+
+Different kind of Windows? [ARM processor](https://github.com/lepton-tech/lepton-fake-server-mail/releases/latest/download/FakeServerEmail-arm64.exe) · [32-bit](https://github.com/lepton-tech/lepton-fake-server-mail/releases/latest/download/FakeServerEmail-x86.exe) · [Which one do I have?](#which-file-to-download)
 
 [![Version](https://img.shields.io/github/v/release/lepton-tech/lepton-fake-server-mail?label=version&color=2f6fde)](https://github.com/lepton-tech/lepton-fake-server-mail/releases/latest)
-[![Windows 10 and 11](https://img.shields.io/badge/Windows-10_%7C_11-0078D6?logo=windows&logoColor=white)](#which-file-to-download)
+[![Windows 10 and 11](https://img.shields.io/badge/Windows-10_%7C_11-0078D6)](#which-file-to-download)
 [![MIT license](https://img.shields.io/badge/license-MIT-555)](LICENSE)
 
 [Which file to download](#which-file-to-download) · [First run](#first-run) · [Troubleshooting](#when-something-does-not-work) · [What's new](CHANGELOG.md)
