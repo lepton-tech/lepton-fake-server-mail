@@ -8,8 +8,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repo = "lepton-tech/lepton-fake-server-mail"
-$project = Join-Path $PSScriptRoot "src\FakeServerEmail\FakeServerEmail.csproj"
-$changelog = Join-Path $PSScriptRoot "CHANGELOG.md"
+$root = Split-Path -Parent $PSScriptRoot
+$project = Join-Path $root "src\FakeServerEmail\FakeServerEmail.csproj"
+$changelog = Join-Path $root "CHANGELOG.md"
 $branch = "release/$Versao"
 
 $gh = (Get-Command gh -ErrorAction SilentlyContinue).Source
@@ -20,7 +21,7 @@ if (-not (Test-Path $gh)) { throw "GitHub CLI não encontrado. Instale com: wing
 if ($LASTEXITCODE -ne 0) { throw "Faça login no GitHub CLI antes: gh auth login" }
 
 $consoleEncoding = [Console]::OutputEncoding
-Push-Location $PSScriptRoot
+Push-Location $root
 try {
     [Console]::OutputEncoding = [Text.Encoding]::UTF8
     if (git status --porcelain) { throw "Há alterações não salvas. Faça commit ou descarte antes de preparar a versão." }
@@ -52,7 +53,7 @@ try {
     git push --quiet -u origin $branch
     if ($LASTEXITCODE -ne 0) { throw "Falha ao enviar a branch $branch." }
 
-    $body = "$changes`n`nDepois do merge, leve a ``develop`` para a ``main`` e rode ``.\lancar-versao.ps1``."
+    $body = "$changes`n`nDepois do merge, leve a ``develop`` para a ``main`` e rode ``.\scripts\lancar-versao.ps1``."
     & $gh pr create --repo $repo --base develop --head $branch --title "Versão $Versao" --body $body
     if ($LASTEXITCODE -ne 0) { throw "A branch $branch foi enviada, mas a PR não foi aberta. Abra com: gh pr create --base develop --head $branch" }
 }

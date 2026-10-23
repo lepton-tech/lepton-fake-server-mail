@@ -22,11 +22,13 @@ dotnet test                                                         # suíte int
 dotnet test --project tests\FakeServerEmail.Tests --filter-method "*Nome_do_teste*"
 dotnet test --project tests\FakeServerEmail.Tests --filter-class "*SmtpTests"
 dotnet format whitespace --verify-no-changes
-.\publicar.ps1                                                      # dist\FakeServerEmail.exe (win-x64)
-.\publicar.ps1 -Runtime win-x64,win-x86,win-arm64
-.\preparar-versao.ps1 1.1.0                                         # branch release/1.1.0 com versão e changelog, e PR para a develop
-.\lancar-versao.ps1                                                 # na main: testa, gera os três exe e publica a release
+.\scripts\publicar.ps1                                              # dist\FakeServerEmail.exe (win-x64)
+.\scripts\publicar.ps1 -Runtime win-x64,win-x86,win-arm64
+.\scripts\preparar-versao.ps1 1.1.0                                 # branch release/1.1.0 com versão e changelog, e PR para a develop
+.\scripts\lancar-versao.ps1                                         # na main: testa, gera os três exe e publica a release
 ```
+
+Os scripts ficam em `scripts/` e resolvem os caminhos a partir da raiz do repositório, então rodam de qualquer pasta.
 
 - O `Directory.Build.props` liga os analisadores `latest-recommended`, o estilo do `.editorconfig` no build e `TreatWarningsAsErrors`: qualquer aviso quebra o build. As versões dos pacotes ficam em `Directory.Packages.props`.
 - Os testes usam o Microsoft.Testing.Platform (definido em `global.json`) com xUnit v3, por isso o filtro é `--filter-method`/`--filter-class`, não `--filter`.

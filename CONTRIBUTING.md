@@ -83,12 +83,12 @@ gh pr merge <número> --merge
 
 ## 3. Lançar uma versão
 
-A versão é a `<Version>` de `src/FakeServerEmail/FakeServerEmail.csproj`. É ela que vai no executável (nas propriedades do arquivo no Windows, no banner do console e no servidor MCP) e que vira a tag `v<Version>`. Não mude a versão à mão: o `preparar-versao.ps1` muda a versão e o changelog juntos.
+A versão é a `<Version>` de `src/FakeServerEmail/FakeServerEmail.csproj`. É ela que vai no executável (nas propriedades do arquivo no Windows, no banner do console e no servidor MCP) e que vira a tag `v<Version>`. Não mude a versão à mão: o `preparar-versao.ps1` muda a versão e o changelog juntos. Os scripts ficam na pasta `scripts/`.
 
 1. Prepare a versão, escolhendo o número pelo que está em **Não lançado**: `1.0.1` se só há correções, `1.1.0` se há novidades ou mudanças, `2.0.0` se algo quebra o uso.
 
    ```powershell
-   .\preparar-versao.ps1 1.1.0
+   .\scripts\preparar-versao.ps1 1.1.0
    ```
 
    O script cria a branch `release/1.1.0` a partir da `develop`, muda a `<Version>` do `.csproj`, transforma o **Não lançado** do `CHANGELOG.md` na seção `1.1.0` com a data de hoje e abre a PR para a `develop`. Ele para se o **Não lançado** estiver vazio. Quem revisa a PR revisa também o texto do changelog, que vai virar as notas da release.
@@ -98,7 +98,7 @@ A versão é a `<Version>` de `src/FakeServerEmail/FakeServerEmail.csproj`. É e
    ```powershell
    git switch main
    git pull
-   .\lancar-versao.ps1
+   .\scripts\lancar-versao.ps1
    ```
 
 O `lancar-versao.ps1` leva alguns minutos e faz, nesta ordem:

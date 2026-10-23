@@ -2,9 +2,10 @@
 
 $ErrorActionPreference = "Stop"
 $repo = "lepton-tech/lepton-fake-server-mail"
-$project = Join-Path $PSScriptRoot "src\FakeServerEmail\FakeServerEmail.csproj"
-$changelog = Join-Path $PSScriptRoot "CHANGELOG.md"
-$dist = Join-Path $PSScriptRoot "dist"
+$root = Split-Path -Parent $PSScriptRoot
+$project = Join-Path $root "src\FakeServerEmail\FakeServerEmail.csproj"
+$changelog = Join-Path $root "CHANGELOG.md"
+$dist = Join-Path $root "dist"
 $assets = "FakeServerEmail.exe", "FakeServerEmail-x86.exe", "FakeServerEmail-arm64.exe" | ForEach-Object { Join-Path $dist $_ }
 
 $gh = (Get-Command gh -ErrorAction SilentlyContinue).Source
@@ -17,7 +18,7 @@ if ($LASTEXITCODE -ne 0) { throw "Faça login no GitHub CLI antes: gh auth login
 $version = ([xml](Get-Content -Raw $project)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
 $tag = "v$version"
 
-Push-Location $PSScriptRoot
+Push-Location $root
 try {
     if (git status --porcelain) { throw "Há alterações não salvas. Faça commit ou descarte antes de lançar a versão." }
 
@@ -33,7 +34,7 @@ try {
     $text = (Get-Content -Raw $changelog) -replace "`r`n", "`n"
     $section = [regex]::Match($text, "(?ms)^## $([regex]::Escape($version)) - [^\n]*\n(.*?)(?=^## |\z)")
     $changes = $section.Groups[1].Value.Trim()
-    if (-not $changes) { throw "O CHANGELOG.md não tem a seção da versão $version. Prepare a versão com: .\preparar-versao.ps1 $version" }
+    if (-not $changes) { throw "O CHANGELOG.md não tem a seção da versão $version. Prepare a versão com: .\scripts\preparar-versao.ps1 $version" }
 
     dotnet test
     if ($LASTEXITCODE -ne 0) { throw "Os testes falharam. Nada foi publicado." }
@@ -44,7 +45,7 @@ try {
         if ((Get-Item $asset).VersionInfo.ProductVersion -notmatch "^$([regex]::Escape($version))(\+|$)") { throw "O $(Split-Path -Leaf $asset) não saiu com a versão $version. Nada foi publicado." }
     }
 
-    $notes = Join-Path $PSScriptRoot "artifacts\notas-da-versao.md"
+    $notes = Join-Path $root "artifacts\notas-da-versao.md"
     Set-Content -Encoding utf8NoBOM $notes @"
 $changes
 
