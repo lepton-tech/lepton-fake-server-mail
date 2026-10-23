@@ -4,12 +4,13 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$project = Join-Path $PSScriptRoot "src\FakeServerEmail\FakeServerEmail.csproj"
-$dist = Join-Path $PSScriptRoot "dist"
+$root = Split-Path -Parent $PSScriptRoot
+$project = Join-Path $root "src\FakeServerEmail\FakeServerEmail.csproj"
+$dist = Join-Path $root "dist"
 New-Item -ItemType Directory -Force $dist | Out-Null
 
 foreach ($rid in $Runtime) {
-    $staging = Join-Path $PSScriptRoot "artifacts\publish\$rid"
+    $staging = Join-Path $root "artifacts\publish\$rid"
     if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
     dotnet publish $project -c Release -r $rid --self-contained true -o $staging
     if ($LASTEXITCODE -ne 0) { throw "Falha ao publicar $rid" }

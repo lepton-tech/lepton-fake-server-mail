@@ -2,8 +2,10 @@
 
 $ErrorActionPreference = "Stop"
 $repo = "lepton-tech/lepton-fake-server-mail"
-$project = Join-Path $PSScriptRoot "src\FakeServerEmail\FakeServerEmail.csproj"
-$dist = Join-Path $PSScriptRoot "dist"
+$root = Split-Path -Parent $PSScriptRoot
+$project = Join-Path $root "src\FakeServerEmail\FakeServerEmail.csproj"
+$changelog = Join-Path $root "CHANGELOG.md"
+$dist = Join-Path $root "dist"
 $assets = "FakeServerEmail.exe", "FakeServerEmail-x86.exe", "FakeServerEmail-arm64.exe" | ForEach-Object { Join-Path $dist $_ }
 
 $gh = (Get-Command gh -ErrorAction SilentlyContinue).Source
@@ -16,7 +18,7 @@ if ($LASTEXITCODE -ne 0) { throw "Faça login no GitHub CLI antes: gh auth login
 $version = ([xml](Get-Content -Raw $project)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
 $tag = "v$version"
 
-Push-Location $PSScriptRoot
+Push-Location $root
 try {
     if (git status --porcelain) { throw "Há alterações não salvas. Faça commit ou descarte antes de lançar a versão." }
 
@@ -29,23 +31,36 @@ try {
     & $gh release view $tag --repo $repo *> $null
     if ($LASTEXITCODE -eq 0) { throw "Já existe uma release $tag, talvez um rascunho de uma tentativa anterior. Apague com: gh release delete $tag --repo $repo --yes" }
 
+    $text = (Get-Content -Raw $changelog) -replace "`r`n", "`n"
+    $section = [regex]::Match($text, "(?ms)^## $([regex]::Escape($version)) - [^\n]*\n(.*?)(?=^## |\z)")
+    $changes = $section.Groups[1].Value.Trim()
+    if (-not $changes) { throw "O CHANGELOG.md não tem a seção da versão $version. Prepare a versão com: .\scripts\preparar-versao.ps1 $version" }
+
     dotnet test
     if ($LASTEXITCODE -ne 0) { throw "Os testes falharam. Nada foi publicado." }
 
     & (Join-Path $PSScriptRoot "publicar.ps1") -Runtime win-x64, win-x86, win-arm64
 
-    $notes = Join-Path $PSScriptRoot "artifacts\notas-da-versao.md"
-    Set-Content -Encoding utf8NoBOM $notes @'
+    foreach ($asset in $assets) {
+        if ((Get-Item $asset).VersionInfo.ProductVersion -notmatch "^$([regex]::Escape($version))(\+|$)") { throw "O $(Split-Path -Leaf $asset) não saiu com a versão $version. Nada foi publicado." }
+    }
+
+    $notes = Join-Path $root "artifacts\notas-da-versao.md"
+    Set-Content -Encoding utf8NoBOM $notes @"
+$changes
+
+### Qual arquivo baixar
+
 Baixe o arquivo do seu Windows e dê dois cliques. Não precisa instalar nada.
 
 | Arquivo | Para |
 |---|---|
-| `FakeServerEmail.exe` | Windows 10 e 11 de 64 bits (a maioria dos computadores) |
-| `FakeServerEmail-x86.exe` | Windows de 32 bits |
-| `FakeServerEmail-arm64.exe` | Windows em processador ARM (Snapdragon, Surface Pro X) |
-'@
+| ``FakeServerEmail.exe`` | Windows 10 e 11 de 64 bits (a maioria dos computadores) |
+| ``FakeServerEmail-x86.exe`` | Windows de 32 bits |
+| ``FakeServerEmail-arm64.exe`` | Windows em processador ARM (Snapdragon, Surface Pro X) |
+"@
 
-    & $gh release create $tag @assets --repo $repo --target $commit --title "Fake Server Email $version" --notes-file $notes --generate-notes --draft
+    & $gh release create $tag @assets --repo $repo --target $commit --title "Fake Server Email $version" --notes-file $notes --draft
     if ($LASTEXITCODE -ne 0) { throw "Falha ao criar a release. Se ficou um rascunho, apague com: gh release delete $tag --repo $repo --yes" }
 
     & $gh release edit $tag --repo $repo --draft=false
