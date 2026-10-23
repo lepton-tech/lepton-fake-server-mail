@@ -150,7 +150,7 @@
 
 .form label.check { flex-direction: row; align-items: flex-start; gap: 8px; color: var(--text); }
 
-.form label.check input { width: auto; margin-top: 3px; }
+.form label.check input { width: auto; margin-top: 3px; flex: none; }
 
 .form .card { display: flex; flex-direction: column; gap: 12px; margin-bottom: 0; }
 

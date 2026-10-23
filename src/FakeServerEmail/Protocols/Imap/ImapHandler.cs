@@ -38,9 +38,10 @@ internal sealed class ImapSession(ServerContext context, MailConnection c, bool 
             var sb = new StringBuilder("IMAP4rev1 LITERAL+ SASL-IR ID ENABLE IDLE NAMESPACE UIDPLUS MOVE UNSELECT CHILDREN SPECIAL-USE");
             if (_user is null)
             {
-                foreach (var m in Sasl.Mechanisms)
+                var settings = context.Settings.Current;
+                foreach (var m in settings.AuthMechanisms)
                     sb.Append(" AUTH=").Append(m);
-                if (allowStartTls && !c.IsSecure)
+                if (allowStartTls && settings.OfferStartTls && !c.IsSecure)
                     sb.Append(" STARTTLS");
             }
             return sb.ToString();
@@ -146,7 +147,7 @@ internal sealed class ImapSession(ServerContext context, MailConnection c, bool 
                 Ok(tag, "ID concluído");
                 return true;
             case "STARTTLS":
-                if (!allowStartTls || c.IsSecure || _user is not null)
+                if (!allowStartTls || !context.Settings.Current.OfferStartTls || c.IsSecure || _user is not null)
                 {
                     Bad(tag, "STARTTLS não disponível");
                     return true;
@@ -295,7 +296,7 @@ internal sealed class ImapSession(ServerContext context, MailConnection c, bool 
         }
         var mechanism = t.Require("mecanismo").Text;
         var initial = t.Next()?.Text;
-        if (!Sasl.IsSupported(mechanism))
+        if (!Sasl.IsOffered(context.Settings.Current, mechanism))
         {
             No(tag, "[CANNOT] Mecanismo de autenticação não suportado");
             return;

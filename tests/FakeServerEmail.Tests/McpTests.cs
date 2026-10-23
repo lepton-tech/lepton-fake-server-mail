@@ -199,4 +199,29 @@ public sealed class McpHttpTests(ServerFixture fx)
             await client.CallJsonAsync("update_settings", new() { ["acceptAnyPassword"] = true, ["users"] = Array.Empty<string>() }, _ct);
         }
     }
+
+    [Fact]
+    public async Task Update_settings_desliga_STARTTLS_e_escolhe_mecanismos()
+    {
+        await using var client = await ConnectAsync();
+        try
+        {
+            var saved = await client.CallJsonAsync("update_settings", new() { ["offerStartTls"] = false, ["authMechanisms"] = new[] { "login", "PLAIN" } }, _ct);
+            Assert.False(saved.GetProperty("offerStartTls").GetBoolean());
+            Assert.Equal(["PLAIN", "LOGIN"], saved.GetProperty("authMechanisms").EnumerateArray().Select(m => m.GetString()!));
+
+            var info = await client.CallJsonAsync("server_info", null, _ct);
+            Assert.Equal(["PLAIN", "LOGIN"], info.GetProperty("authentication").GetProperty("mechanisms").EnumerateArray().Select(m => m.GetString()!));
+            var smtp = info.GetProperty("services").EnumerateArray().First(s => s.GetProperty("name").GetString() == "SMTP");
+            Assert.Contains("sem STARTTLS", smtp.GetProperty("security").GetString());
+
+            var error = await client.CallErrorAsync("update_settings", new() { ["authMechanisms"] = new[] { "PLAIN", "CRAM-MD5" } }, _ct);
+            Assert.Contains("CRAM-MD5", error);
+            Assert.Equal(["PLAIN", "LOGIN"], fx.Server.Context.Settings.Current.AuthMechanisms);
+        }
+        finally
+        {
+            await client.CallJsonAsync("update_settings", new() { ["offerStartTls"] = true, ["authMechanisms"] = new[] { "PLAIN", "LOGIN", "XOAUTH2", "OAUTHBEARER" } }, _ct);
+        }
+    }
 }

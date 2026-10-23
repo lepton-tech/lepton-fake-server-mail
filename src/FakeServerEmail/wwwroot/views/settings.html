@@ -44,6 +44,24 @@
           <label>Validade dos tokens OAuth (segundos) <input type="number" min="10" x-model="model.tokenLifetimeSeconds"></label>
         </div>
         <div class="card">
+          <h3>STARTTLS e mecanismos de login</h3>
+          <p class="muted small">Para imitar um servidor mais limitado e ver como o aplicativo reage. Vale para o SMTP, o POP3 e o IMAP.</p>
+          <label class="check">
+            <input type="checkbox" x-model="model.offerStartTls">
+            <span>Oferecer STARTTLS<br><span class="muted small">Desligado, as portas sem TLS deixam de anunciar o <code>STARTTLS</code> (<code>STLS</code> no POP3) e recusam o comando, como um servidor que só fala texto puro. As portas de TLS direto (SMTPS, POP3S e IMAPS) continuam iguais.</span></span>
+          </label>
+          <p class="muted small">Mecanismos anunciados no <code>AUTH</code>. Só os marcados aparecem no <code>EHLO</code>, no <code>CAPA</code> e no <code>CAPABILITY</code>; os outros são recusados como não suportados. O <code>LOGIN</code> do IMAP e o <code>USER</code>/<code>PASS</code> do POP3 não são mecanismos e continuam aceitos.</p>
+          <div class="choices">
+            <template x-for="m in mechanisms" :key="m[0]">
+              <label class="check option" :class="{ chosen: model.authMechanisms.includes(m[0]) }">
+                <input type="checkbox" :value="m[0]" x-model="model.authMechanisms">
+                <span><b x-text="m[0]"></b><br><span class="muted small" x-text="m[1]"></span></span>
+              </label>
+            </template>
+          </div>
+          <p class="muted small" x-show="model.authMechanisms.length === 0">Nenhum marcado: o servidor não anuncia <code>AUTH</code> e recusa qualquer tentativa. Com "Exigir login para enviar pelo SMTP" ligado, ninguém consegue enviar.</p>
+        </div>
+        <div class="card">
           <h3>Caixas de correio</h3>
           <label class="check"><input type="checkbox" x-model="model.separateMailboxesByRecipient"> Separar caixas por destinatário (no POP3/IMAP, quem entra com um e-mail vê só as mensagens enviadas para ele)</label>
           <label>Tamanho máximo da mensagem (MB) <input type="number" min="1" max="1024" x-model="model.maxMessageSizeMb"></label>

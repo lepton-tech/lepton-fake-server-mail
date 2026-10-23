@@ -66,6 +66,7 @@ export default () => ({
 
   security(s) {
     if (s.tls === "implicit") return "TLS direto (SSL)";
+    if (s.tls === "none") return "Sem TLS (STARTTLS desligado)";
     return s.protocol === "POP3" ? "Sem TLS ou STLS" : "Sem TLS ou STARTTLS";
   },
 

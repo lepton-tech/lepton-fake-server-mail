@@ -13,12 +13,20 @@ const PORTS = [
   ["httpsPort", "OAuth/Web (HTTPS)"],
 ];
 
+const MECHANISMS = [
+  ["PLAIN", "Usuário e senha num passo só. O mais comum."],
+  ["LOGIN", "Usuário e senha em dois passos. Legado, ainda usado pelo Outlook e por clientes antigos."],
+  ["XOAUTH2", "Token OAuth no formato do Google e da Microsoft."],
+  ["OAUTHBEARER", "Token OAuth no formato padrão (RFC 7628)."],
+];
+
 let nextRowId = 1;
 
 const row = (username = "", password = "") => ({ id: nextRowId++, username, password });
 
 export default () => ({
   ports: PORTS,
+  mechanisms: MECHANISMS,
   model: null,
   userRows: [],
   message: "",

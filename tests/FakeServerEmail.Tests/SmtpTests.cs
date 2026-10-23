@@ -118,4 +118,62 @@ public sealed class SmtpTests(ServerFixture fx)
         await writer.WriteLineAsync("QUIT");
         Assert.StartsWith("221", await reader.ReadLineAsync(_ct));
     }
+
+    [Fact]
+    public async Task Sem_STARTTLS_e_so_PLAIN_quando_configurado()
+    {
+        var settings = fx.Server.Context.Settings;
+        var original = settings.Current.Clone();
+        try
+        {
+            var changed = original.Clone();
+            changed.OfferStartTls = false;
+            changed.AuthMechanisms = ["plain"];
+            settings.Update(changed);
+
+            using (var strict = new SmtpClient())
+                await Assert.ThrowsAsync<NotSupportedException>(() => strict.ConnectAsync("127.0.0.1", fx.Smtp, SecureSocketOptions.StartTls, _ct));
+
+            var subject = "smtp-so-plain-" + Guid.NewGuid();
+            using (var client = new SmtpClient())
+            {
+                await client.ConnectAsync("127.0.0.1", fx.Smtp, SecureSocketOptions.StartTlsWhenAvailable, _ct);
+                Assert.False(client.IsSecure);
+                Assert.Equal("PLAIN", Assert.Single(client.AuthenticationMechanisms));
+                await client.AuthenticateAsync("plain@teste.local", "x", _ct);
+                await client.SendAsync(ServerFixture.Simple(subject), _ct);
+                await client.DisconnectAsync(true, _ct);
+            }
+            Assert.Equal("plain@teste.local", fx.Server.Context.Store.List().Single(m => m.Subject == subject).AuthenticatedUser);
+
+            using var tcp = new TcpClient();
+            await tcp.ConnectAsync("127.0.0.1", fx.Smtp, _ct);
+            var stream = tcp.GetStream();
+            var reader = new StreamReader(stream, Encoding.ASCII);
+            var writer = new StreamWriter(stream, Encoding.ASCII) { NewLine = "\r\n", AutoFlush = true };
+            await reader.ReadLineAsync(_ct);
+            await writer.WriteLineAsync("STARTTLS");
+            Assert.StartsWith("502", await reader.ReadLineAsync(_ct));
+            await writer.WriteLineAsync("AUTH LOGIN");
+            Assert.StartsWith("504", await reader.ReadLineAsync(_ct));
+
+            changed.AuthMechanisms = [];
+            settings.Update(changed);
+            await writer.WriteLineAsync("EHLO cliente");
+            var ehlo = new List<string>();
+            string? line;
+            do
+            {
+                line = await reader.ReadLineAsync(_ct) ?? throw new IOException("conexão fechada");
+                ehlo.Add(line);
+            } while (line.StartsWith("250-"));
+            Assert.DoesNotContain(ehlo, l => l.Contains("AUTH") || l.Contains("STARTTLS"));
+            await writer.WriteLineAsync("AUTH PLAIN");
+            Assert.StartsWith("504", await reader.ReadLineAsync(_ct));
+        }
+        finally
+        {
+            settings.Update(original);
+        }
+    }
 }

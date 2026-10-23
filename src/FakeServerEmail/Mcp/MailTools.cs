@@ -41,7 +41,12 @@ public sealed partial class MailTools(MailApiClient api)
                 name = s.GetProperty("name").GetString(),
                 protocol = s.GetProperty("protocol").GetString(),
                 port = s.GetProperty("port").ValueKind == JsonValueKind.Number ? s.GetProperty("port").GetInt32() : (int?)null,
-                security = s.GetProperty("tls").GetString() == "implicit" ? "TLS direto (SSL)" : "texto puro, STARTTLS opcional",
+                security = s.GetProperty("tls").GetString() switch
+                {
+                    "implicit" => "TLS direto (SSL)",
+                    "none" => "texto puro, sem STARTTLS (desligado em offerStartTls)",
+                    _ => "texto puro, STARTTLS opcional",
+                },
                 running = s.GetProperty("running").GetBoolean(),
                 note = s.GetProperty("error").GetString(),
             }),
@@ -51,7 +56,7 @@ public sealed partial class MailTools(MailApiClient api)
                 allowedUsers = settings.AcceptAnyPassword ? null : settings.Users.Select(u => $"{u.Username}:{u.Password}"),
                 smtpRequiresAuth = settings.SmtpRequireAuth,
                 validateOAuthTokens = settings.ValidateOAuthTokens,
-                mechanisms = Protocols.Sasl.Mechanisms,
+                mechanisms = settings.AuthMechanisms,
                 certificate = "autoassinado para localhost; o cliente precisa aceitar certificado inválido ao usar TLS",
             },
             mailboxes = new
@@ -405,11 +410,13 @@ public sealed partial class MailTools(MailApiClient api)
     }
 
     [McpServerTool(Name = "update_settings", Title = "Alterar configurações", Idempotent = true)]
-    [Description("Altera regras do servidor para simular cenários: exigir senha correta, exigir autenticação no SMTP, validar tokens OAuth, validade dos tokens, separar caixas por destinatário e tamanho máximo. Só muda os campos informados.")]
+    [Description("Altera regras do servidor para simular cenários: exigir senha correta, exigir autenticação no SMTP, desligar o STARTTLS, escolher os mecanismos de AUTH anunciados, validar tokens OAuth, validade dos tokens, separar caixas por destinatário e tamanho máximo. Só muda os campos informados.")]
     public async Task<object> UpdateSettings(
         [Description("Aceitar qualquer usuário e senha.")] bool? acceptAnyPassword = null,
         [Description("Usuários aceitos quando acceptAnyPassword = false, no formato \"usuario:senha\".")] string[]? users = null,
         [Description("Exigir AUTH antes de MAIL FROM no SMTP.")] bool? smtpRequireAuth = null,
+        [Description("Anunciar e aceitar STARTTLS (STLS no POP3) nas portas sem TLS. false simula um servidor sem STARTTLS; as portas de TLS direto continuam iguais.")] bool? offerStartTls = null,
+        [Description("Mecanismos SASL anunciados e aceitos no AUTH do SMTP, POP3 e IMAP, entre PLAIN, LOGIN, XOAUTH2 e OAUTHBEARER. Ex.: [\"PLAIN\"]. Lista vazia: o servidor não anuncia AUTH. O comando LOGIN do IMAP e o USER/PASS do POP3 continuam aceitos.")] string[]? authMechanisms = null,
         [Description("Validar assinatura, validade, revogação e dono dos tokens OAuth.")] bool? validateOAuthTokens = null,
         [Description("Validade padrão dos tokens OAuth em segundos.")] int? tokenLifetimeSeconds = null,
         [Description("No POP3/IMAP, login com e-mail vê só as mensagens endereçadas a ele.")] bool? separateMailboxesByRecipient = null,
@@ -421,6 +428,14 @@ public sealed partial class MailTools(MailApiClient api)
         if (users is not null)
             settings.Users = users.Select(u => u.Split(':', 2)).Select(p => new UserAccount { Username = p[0].Trim(), Password = p.Length > 1 ? p[1] : "" }).ToList();
         if (smtpRequireAuth is not null) settings.SmtpRequireAuth = smtpRequireAuth.Value;
+        if (offerStartTls is not null) settings.OfferStartTls = offerStartTls.Value;
+        if (authMechanisms is not null)
+        {
+            var unknown = authMechanisms.Where(m => !Protocols.Sasl.IsSupported(m.Trim())).ToList();
+            if (unknown.Count > 0)
+                throw new McpException($"Mecanismo desconhecido: {string.Join(", ", unknown)}. Use {string.Join(", ", Protocols.Sasl.Mechanisms)}.");
+            settings.AuthMechanisms = authMechanisms.Select(m => m.Trim()).ToList();
+        }
         if (validateOAuthTokens is not null) settings.ValidateOAuthTokens = validateOAuthTokens.Value;
         if (tokenLifetimeSeconds is not null) settings.TokenLifetimeSeconds = tokenLifetimeSeconds.Value;
         if (separateMailboxesByRecipient is not null) settings.SeparateMailboxesByRecipient = separateMailboxesByRecipient.Value;
@@ -432,6 +447,8 @@ public sealed partial class MailTools(MailApiClient api)
             saved.AcceptAnyPassword,
             users = saved.Users.Select(u => $"{u.Username}:{u.Password}"),
             saved.SmtpRequireAuth,
+            saved.OfferStartTls,
+            saved.AuthMechanisms,
             saved.ValidateOAuthTokens,
             saved.TokenLifetimeSeconds,
             saved.SeparateMailboxesByRecipient,

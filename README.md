@@ -19,7 +19,7 @@ Dê dois cliques no executável: os serviços sobem e o navegador abre a caixa d
 
 Se uma porta estiver ocupada, o servidor escolhe outra sozinho (por exemplo, 25 vira 2025) e mostra a porta real no console e na interface.
 
-- **Autenticação:** por padrão, aceita qualquer usuário e senha (PLAIN, LOGIN, XOAUTH2 e OAUTHBEARER). Em **Configurações → Usuário e senha** dá para aceitar só usuários cadastrados, para testar senha errada. Em **Regras de envio e de tokens** dá para exigir login no SMTP e validar os tokens OAuth.
+- **Autenticação:** por padrão, aceita qualquer usuário e senha (PLAIN, LOGIN, XOAUTH2 e OAUTHBEARER). Em **Configurações → Usuário e senha** dá para aceitar só usuários cadastrados, para testar senha errada. Em **Regras de envio e de tokens** dá para exigir login no SMTP e validar os tokens OAuth. Em **STARTTLS e mecanismos de login** dá para desligar o STARTTLS e escolher quais mecanismos anunciar (só PLAIN, por exemplo), para imitar um servidor mais limitado.
 - **OAuth 2.0:** `authorization_code` com PKCE, `refresh_token`, `client_credentials`, `password` e `device_code`, com discovery OIDC, JWKS e rotas no estilo Microsoft (`/{tenant}/oauth2/v2.0/token`). Os tokens são JWT assinados, e os serviços de e-mail recusam token expirado, revogado ou de outro usuário.
 - **Interface:** visualização HTML, texto, cabeçalhos, código-fonte, anexos, dados de entrega, log completo das conexões, tokens emitidos e exemplos de código para conectar.
 - **Dados:** ficam em `%LOCALAPPDATA%\FakeServerEmail` (mensagens em `.eml`, configurações, certificado TLS autoassinado e chave do OAuth). Use `--data <pasta>` para outra pasta e `--no-browser` para não abrir o navegador.
@@ -48,7 +48,7 @@ A aba **Como conectar** da interface mostra a configuração pronta para Claude 
 | `delete_messages`, `mark_messages` | limpar a caixa, marcar como lida ou não lida |
 | `create_oauth_token`, `list_oauth_tokens`, `revoke_oauth_token` | tokens para XOAUTH2/OAUTHBEARER e teste de recusa |
 | `list_connections`, `get_connection_log` | depurar por que o sistema não conseguiu enviar ou autenticar |
-| `update_settings` | exigir senha, exigir AUTH no SMTP, validade dos tokens etc. |
+| `update_settings` | exigir senha, exigir AUTH no SMTP, desligar STARTTLS, mecanismos de AUTH, validade dos tokens etc. |
 
 ## Estrutura do frontend
 

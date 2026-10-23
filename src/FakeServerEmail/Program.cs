@@ -170,9 +170,10 @@ static void PrintBanner(FakeMailServer server)
     Write(ConsoleColor.Green, server.WebUrl);
     Console.WriteLine();
     Console.WriteLine("  Serviço           Porta   Segurança");
+    var settings = context.Settings.Current;
     foreach (var s in server.Services)
     {
-        var security = s.ImplicitTls ? "TLS" : s.Protocol == "POP3" ? "STLS opcional" : "STARTTLS opcional";
+        var security = s.ImplicitTls ? "TLS" : !settings.OfferStartTls ? "sem TLS (STARTTLS desligado)" : s.Protocol == "POP3" ? "STLS opcional" : "STARTTLS opcional";
         Console.Write($"  {s.Name,-17} ");
         if (s.Running)
         {
@@ -190,7 +191,6 @@ static void PrintBanner(FakeMailServer server)
     Console.WriteLine($"  {"OAuth 2.0",-17} {context.OpenIdConfigurationUrl}");
     Console.WriteLine($"  {"MCP (agentes)",-17} {context.HttpBaseUrl}/mcp  ou  FakeServerEmail.exe --mcp");
     Console.WriteLine();
-    var settings = context.Settings.Current;
     Console.WriteLine(settings.AcceptAnyPassword ? "  Qualquer usuário e senha são aceitos." : "  Somente os usuários cadastrados são aceitos.");
     Console.WriteLine("  Dados em: " + context.DataDirectory);
     Console.ForegroundColor = ConsoleColor.DarkGray;

@@ -47,4 +47,34 @@ public sealed class Pop3Tests(ServerFixture fx)
         await client.NoOpAsync(_ct);
         await client.DisconnectAsync(true, _ct);
     }
+
+    [Fact]
+    public async Task Sem_STLS_e_so_PLAIN_quando_configurado()
+    {
+        var settings = fx.Server.Context.Settings;
+        var original = settings.Current.Clone();
+        try
+        {
+            var changed = original.Clone();
+            changed.OfferStartTls = false;
+            changed.AuthMechanisms = ["PLAIN"];
+            settings.Update(changed);
+
+            using (var strict = new Pop3Client())
+                await Assert.ThrowsAsync<NotSupportedException>(() => strict.ConnectAsync("127.0.0.1", fx.Pop3, SecureSocketOptions.StartTls, _ct));
+
+            var user = "pop-plain-" + Guid.NewGuid().ToString("N") + "@teste.local";
+            using var client = new Pop3Client();
+            await client.ConnectAsync("127.0.0.1", fx.Pop3, SecureSocketOptions.StartTlsWhenAvailable, _ct);
+            Assert.False(client.IsSecure);
+            Assert.Equal("PLAIN", Assert.Single(client.AuthenticationMechanisms));
+            await client.AuthenticateAsync(user, "x", _ct);
+            await client.DisconnectAsync(true, _ct);
+            Assert.Equal("PLAIN", fx.Server.Context.Log.List().Single(s => s.User == user).AuthMechanism);
+        }
+        finally
+        {
+            settings.Update(original);
+        }
+    }
 }

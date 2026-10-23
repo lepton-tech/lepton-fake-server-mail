@@ -227,7 +227,7 @@ public sealed class FakeMailServer : IAsyncDisposable
                 protocol = x.Protocol,
                 configuredPort = x.ConfiguredPort,
                 port = x.ActualPort,
-                tls = x.ImplicitTls ? "implicit" : "starttls",
+                tls = x.ImplicitTls ? "implicit" : s.OfferStartTls ? "starttls" : "none",
                 running = x.Running,
                 error = x.Error,
                 connections = x.ActiveConnections,

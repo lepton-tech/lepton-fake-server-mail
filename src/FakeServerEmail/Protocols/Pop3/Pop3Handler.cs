@@ -44,7 +44,7 @@ public sealed class Pop3Handler(ServerContext context, bool allowStartTls) : IPr
                         WriteCapabilities(c, false);
                         break;
                     case "STLS":
-                        if (!allowStartTls || c.IsSecure)
+                        if (!allowStartTls || !context.Settings.Current.OfferStartTls || c.IsSecure)
                         {
                             c.WriteLine("-ERR STLS não disponível nesta conexão");
                             break;
@@ -85,13 +85,13 @@ public sealed class Pop3Handler(ServerContext context, bool allowStartTls) : IPr
                         if (arg.Length == 0)
                         {
                             c.WriteLine("+OK Mecanismos suportados");
-                            foreach (var m in Sasl.Mechanisms)
+                            foreach (var m in context.Settings.Current.AuthMechanisms)
                                 c.WriteLine(m);
                             c.WriteLine(".");
                             break;
                         }
                         var authParts = arg.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-                        if (!Sasl.IsSupported(authParts[0]))
+                        if (!Sasl.IsOffered(context.Settings.Current, authParts[0]))
                         {
                             c.WriteLine("-ERR Mecanismo de autenticação não suportado");
                             break;
@@ -253,9 +253,11 @@ public sealed class Pop3Handler(ServerContext context, bool allowStartTls) : IPr
         c.WriteLine("PIPELINING");
         if (!authenticated)
         {
+            var settings = context.Settings.Current;
             c.WriteLine("USER");
-            c.WriteLine("SASL " + string.Join(' ', Sasl.Mechanisms));
-            if (allowStartTls && !c.IsSecure)
+            if (settings.AuthMechanisms.Count > 0)
+                c.WriteLine("SASL " + string.Join(' ', settings.AuthMechanisms));
+            if (allowStartTls && settings.OfferStartTls && !c.IsSecure)
                 c.WriteLine("STLS");
         }
         c.WriteLine("IMPLEMENTATION Fake-Server-Email");

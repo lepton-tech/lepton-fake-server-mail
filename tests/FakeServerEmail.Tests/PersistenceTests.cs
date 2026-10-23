@@ -61,4 +61,26 @@ public sealed class PersistenceTests
 
         try { Directory.Delete(data, true); } catch { }
     }
+
+    [Fact]
+    public void Settings_antigo_ganha_STARTTLS_e_todos_os_mecanismos_e_lista_e_normalizada()
+    {
+        var data = Path.Combine(Path.GetTempPath(), "fse-settings-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(data);
+        try
+        {
+            File.WriteAllText(Path.Combine(data, "settings.json"), """{ "smtpPort": 2525 }""");
+            var old = new Core.SettingsStore(data).Current;
+            Assert.Equal(2525, old.SmtpPort);
+            Assert.True(old.OfferStartTls);
+            Assert.Equal(["PLAIN", "LOGIN", "XOAUTH2", "OAUTHBEARER"], old.AuthMechanisms);
+
+            File.WriteAllText(Path.Combine(data, "settings.json"), """{ "authMechanisms": ["xoauth2", "CRAM-MD5", "plain", "PLAIN"] }""");
+            Assert.Equal(["PLAIN", "XOAUTH2"], new Core.SettingsStore(data).Current.AuthMechanisms);
+        }
+        finally
+        {
+            try { Directory.Delete(data, true); } catch { }
+        }
+    }
 }

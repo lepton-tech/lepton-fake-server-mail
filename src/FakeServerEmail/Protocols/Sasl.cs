@@ -47,6 +47,8 @@ public static class Sasl
 
     public static bool IsSupported(string mechanism) => Mechanisms.Contains(mechanism, StringComparer.OrdinalIgnoreCase);
 
+    public static bool IsOffered(AppSettings settings, string mechanism) => settings.AuthMechanisms.Contains(mechanism, StringComparer.OrdinalIgnoreCase);
+
     public static async Task<SaslOutcome> AuthenticateAsync(string mechanism, string? initialResponse, Func<string, Task<string?>> challenge, Authenticator authenticator, string openIdConfigurationUrl)
     {
         mechanism = mechanism.ToUpperInvariant();

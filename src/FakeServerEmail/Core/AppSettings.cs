@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using FakeServerEmail.Protocols;
 
 namespace FakeServerEmail.Core;
 
@@ -23,6 +24,8 @@ public sealed class AppSettings
     public bool AllowNetworkAccess { get; set; }
     public bool OpenBrowserOnStart { get; set; } = true;
     public bool SmtpRequireAuth { get; set; }
+    public bool OfferStartTls { get; set; } = true;
+    public List<string> AuthMechanisms { get; set; } = [.. Sasl.Mechanisms];
     public bool AcceptAnyPassword { get; set; } = true;
     public List<UserAccount> Users { get; set; } = [];
     public bool ValidateOAuthTokens { get; set; } = true;
@@ -88,6 +91,7 @@ public sealed class SettingsStore
     {
         s.Users ??= [];
         s.Users.RemoveAll(u => string.IsNullOrWhiteSpace(u.Username));
+        s.AuthMechanisms = s.AuthMechanisms is null ? [.. Sasl.Mechanisms] : Sasl.Mechanisms.Where(m => s.AuthMechanisms.Contains(m, StringComparer.OrdinalIgnoreCase)).ToList();
         s.TokenLifetimeSeconds = Math.Clamp(s.TokenLifetimeSeconds, 10, 60 * 60 * 24 * 30);
         s.MaxMessageSizeMb = Math.Clamp(s.MaxMessageSizeMb, 1, 1024);
     }

@@ -76,14 +76,15 @@ public sealed class SmtpHandler(ServerContext context, bool allowStartTls) : IPr
                     c.WriteLine("250-PIPELINING");
                     c.WriteLine("250-ENHANCEDSTATUSCODES");
                     c.WriteLine("250-CHUNKING");
-                    if (allowStartTls && !c.IsSecure)
+                    if (allowStartTls && settings.OfferStartTls && !c.IsSecure)
                         c.WriteLine("250-STARTTLS");
-                    c.WriteLine("250-AUTH " + string.Join(' ', Sasl.Mechanisms));
+                    if (settings.AuthMechanisms.Count > 0)
+                        c.WriteLine("250-AUTH " + string.Join(' ', settings.AuthMechanisms));
                     c.WriteLine("250 HELP");
                     break;
 
                 case "STARTTLS":
-                    if (!allowStartTls || c.IsSecure)
+                    if (!allowStartTls || !settings.OfferStartTls || c.IsSecure)
                     {
                         c.WriteLine("502 5.5.1 STARTTLS não disponível nesta conexão");
                         break;
@@ -108,7 +109,7 @@ public sealed class SmtpHandler(ServerContext context, bool allowStartTls) : IPr
                         break;
                     }
                     var authParts = arg.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-                    if (authParts.Length == 0 || !Sasl.IsSupported(authParts[0]))
+                    if (authParts.Length == 0 || !Sasl.IsOffered(settings, authParts[0]))
                     {
                         c.WriteLine("504 5.5.4 Mecanismo de autenticação não suportado");
                         break;
